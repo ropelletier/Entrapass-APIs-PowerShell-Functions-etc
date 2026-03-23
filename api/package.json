@@ -1,0 +1,15 @@
+{
+  "name": "kantech-api",
+  "version": "1.0.0",
+  "description": "Kantech EntraPass REST API — queries ADS directly",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2",
+    "uuid": "^9.0.1"
+  }
+}

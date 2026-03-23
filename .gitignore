@@ -1,0 +1,23 @@
+# Private configuration — never commit
+.env
+.env.backups/
+api/field-map.json
+
+# Claude Code memory (local dev tooling)
+.claude/
+
+# Compiled binaries (rebuilt by installer)
+KantechEventService.exe
+KantechApiService.exe
+
+# NuGet packages (binary, large)
+*.nupkg
+
+# CSV exports
+*.csv
+
+# Log files
+*.log
+
+# Temp files
+*.tmp

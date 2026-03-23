@@ -18,7 +18,7 @@ Both tools query the EntraPass Advantage database directly using `asqlcmd.exe`, 
 | .NET Framework 4.6+ | Already present — required by EntraPass |
 | Advantage Data Architect v12 | Already installed at `C:\Program Files (x86)\Advantage 12.0\` |
 | MySQL server | Remote server reachable from this machine |
-| `MySql.Data.dll` | Already downloaded to `C:\Projects\Kantech\` |
+| `MySqlConnector.dll` + dependencies | Already downloaded to `C:\Projects\Kantech\` (MySqlConnector 1.3.14 + System.Buffers/Memory/etc.) |
 
 ---
 
@@ -29,16 +29,139 @@ C:\Projects\Kantech\
   .env                          Configuration — credentials and paths (edit this)
   .env.example                  Safe template showing all available settings
   Load-Env.ps1                  Shared .env loader used by all scripts
-  MySql.Data.dll                MySQL Connector/NET v8.3 (no install needed)
+  MySqlConnector.dll            MySqlConnector 1.3.14 — MySQL 8 compatible (no install needed)
+  System.Buffers.dll            Dependency for MySqlConnector
+  System.Memory.dll             Dependency for MySqlConnector
+  System.Runtime.CompilerServices.Unsafe.dll  Dependency for MySqlConnector
+  System.Threading.Tasks.Extensions.dll       Dependency for MySqlConnector
 
   Export-KantechCards.ps1       Nightly export script
   Register-NightlyExport.ps1    Registers the export as a Scheduled Task (run once)
 
-  Watch-DoorEvents.ps1          Door event monitor loop
+  Watch-Kantech.ps1             Combined monitor — door events, alarms, after-hours, denials
   KantechEventService.cs        Windows Service wrapper source
   KantechEventService.exe       Compiled service binary (rebuilt by installer)
-  Install-KantechEventService.ps1  Builds and installs the Windows service (run once)
+  Install-KantechEventService.ps1  Builds and installs the Windows service (run once, non-interactive)
+  Install-Kantech.ps1           Interactive installer — prompts for all settings, installs all components
+
+  Create-KantechEventsView.ps1  Creates the kantech_events MySQL view (run once)
+  Create-ChangeLogTriggers.sql  MySQL change-log table + triggers definition
+  Apply-Triggers.ps1            Applies Create-ChangeLogTriggers.sql to MySQL (requires admin)
+
+  KantechApiService.cs          Windows Service wrapper for the Node.js API
+  KantechApiService.exe         Compiled service binary (rebuilt by installer)
+  Install-KantechApiService.ps1 Builds and installs KantechApiServer service
+
+  api\                          REST API (Node.js + Express, port 3000)
+    server.js                   Main entry point
+    db.js                       ADS query helper (wraps asqlcmd.exe)
+    auth.js                     API key middleware
+    keys.js                     Key store (api-keys.json)
+    manage-keys.js              CLI: create / list / revoke API keys
+    routes\users.js             /api/v1/users endpoints
+    routes\cards.js             /api/v1/cards endpoints
+    routes\events.js            /api/v1/events endpoints
+    routes\admin.js             /api/v1/admin/keys endpoints
 ```
+
+---
+
+## REST API
+
+### Install as a Windows Service (recommended)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Projects\Kantech\Install-KantechApiService.ps1"
+```
+
+Installs as **KantechApiServer** (auto-start, restarts on crash). Then create your first API key:
+
+```cmd
+cd C:\Projects\Kantech\api
+node manage-keys.js create "Admin" 365
+```
+
+### Run manually (development)
+
+```cmd
+cd C:\Projects\Kantech\api
+npm install
+node server.js
+```
+
+Full documentation with request/response examples: **[api/API.md](api/API.md)**
+
+### Endpoint reference
+
+| Method | URL | Description |
+|--------|-----|-------------|
+| GET | `/api/v1/users` | All cardholders (with cards array) |
+| GET | `/api/v1/users?name=Smith` | Name search (LIKE, any part) |
+| GET | `/api/v1/users?card=00001234` | By card number |
+| GET | `/api/v1/users?state=0` | By state (0=Active 1=Lost 2=Inactive) |
+| GET | `/api/v1/users?access_level=Staff` | By access level (LIKE) |
+| GET | `/api/v1/users/:id` | Single user by CardholderID |
+| GET | `/api/v1/users/:id/cards` | Cards for a user |
+| GET | `/api/v1/users/:id/events` | Today's events for a user (add `?date=` for other days) |
+| POST | `/api/v1/users` | Create cardholder |
+| PUT | `/api/v1/users/:id` | Update cardholder fields (name, email, state, accessLevel, accessException, accessExceptionExpiry, startDate, endDate, cardType) |
+| GET | `/api/v1/cards` | All card records |
+| GET | `/api/v1/cards?user_id=123` | Cards for a cardholder |
+| GET | `/api/v1/cards?lost=true` | Lost/stolen cards |
+| GET | `/api/v1/cards/:number` | Single card by number |
+| POST | `/api/v1/cards` | Assign card to cardholder |
+| PUT | `/api/v1/cards/:number` | Update card (number, numberRaw, lostStolen, deactivated, endDate) |
+| GET | `/api/v1/events` | Today's door events (from ADS archive) |
+| GET | `/api/v1/events?date=2026-03-22` | Events for a specific date |
+| GET | `/api/v1/events?user_id=123` | Events for a cardholder |
+| GET | `/api/v1/events?door=CES` | Filter by door name |
+| GET | `/api/v1/events?granted=true` | Access-granted events only |
+| GET | `/api/v1/events/recent?minutes=60` | Events in the last N minutes |
+| GET | `/api/v1/doors` | All doors with current mode and active overrides |
+| GET | `/api/v1/doors/:id` | Single door |
+| POST | `/api/v1/doors/:id/unlock` | Unlock for N seconds (default 5), then relock |
+| POST | `/api/v1/doors/:id/lock` | Lock for N seconds (default 5), then restore |
+| POST | `/api/v1/doors/:id/normal` | Cancel override, restore normal mode immediately |
+| GET | `/api/v1/access-levels` | All access levels (id, name, allValid flag) |
+| POST | `/api/v1/access-levels` | Create access level (name, description, allValid) |
+| PUT | `/api/v1/access-levels/:id` | Update access level (name, description, allValid, noneValid) |
+| GET | `/api/v1/card-types` | All card types (id, name) |
+| POST | `/api/v1/card-types` | Create card type (name, description) |
+| PUT | `/api/v1/card-types/:id` | Update card type (name, description) |
+| GET | `/api/v1/admin/keys` | List API keys |
+| POST | `/api/v1/admin/keys` | Create API key |
+| DELETE | `/api/v1/admin/keys/:id` | Revoke API key |
+
+All requests require header: `X-Api-Key: kntk_<your-key>`
+
+### API key management (CLI)
+
+```cmd
+node manage-keys.js create "App Name" 365    # create key, expires in 365 days
+node manage-keys.js create "No-Expiry App"   # create key with no expiry
+node manage-keys.js list                     # show all keys and status
+node manage-keys.js revoke <id>              # deactivate a key
+```
+
+Keys are stored in `api\api-keys.json` (gitignored). The raw key is shown once on creation.
+
+---
+
+## Quick Install (Interactive)
+
+Run the interactive installer as Administrator. It will prompt for all settings, back up your existing `.env`, and install whatever components you choose:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Projects\Kantech\Install-Kantech.ps1"
+```
+
+The installer handles:
+- Writing `.env` from prompted values (backs up any existing `.env` to `.env.backups\`)
+- Registering the nightly card export as a Scheduled Task
+- Compiling and installing the door event monitor as a Windows Service
+- Optionally creating MySQL views and applying change-log triggers
+
+Re-run the installer any time you change a setting — it will stop the old service, recompile, and reinstall cleanly.
 
 ---
 
@@ -257,6 +380,48 @@ Logs rotate monthly for door events. The card export log is appended indefinitel
 
 ---
 
+## Step 4 — MySQL Views and Change Tracking
+
+### kantech_events view (mirrors entrapass_events)
+
+Run once after the door event monitor is installed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Projects\Kantech\Create-KantechEventsView.ps1"
+```
+
+Creates `kantech_events` with the same columns as the existing `entrapass_events` view:
+
+| Column | Source | Notes |
+|--------|--------|-------|
+| `datetime` | `EventDateTime` | When the event occurred |
+| `door` | `DoorName` | Door name with site-prefix substitutions applied |
+| `username` | `CardholderName` | Cardholder full name |
+| `Name_exp_4` | `AccessLevel` | Access level (title-cased) from `kantech_cards` |
+| `event` | `EventType` | Human-readable event type |
+
+Door name substitutions match `entrapass_events`: strips `RSU_87, `, replaces `Carmel Elementary` → `CES`, replaces `Caravel` → `CMS`.
+
+### Change log triggers
+
+Fires on every `INSERT`, `UPDATE`, or `DELETE` on `kantech_cards`, logging the change to `kantech_change_log`. A stub procedure `on_kantech_change()` is included for future automation.
+
+**Requires MySQL admin** to enable first (binary logging restriction):
+
+```sql
+SET GLOBAL log_bin_trust_function_creators = 1;
+```
+
+Then apply:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Projects\Kantech\Apply-Triggers.ps1"
+```
+
+To implement the future action, edit the `on_kantech_change` procedure body in `Create-ChangeLogTriggers.sql` and re-run `Apply-Triggers.ps1`.
+
+---
+
 ## MySQL — Useful Queries
 
 ```sql
@@ -284,4 +449,13 @@ SELECT CardholderID, FullName, StateLabel, CreationDate
 FROM kantech_cards
 WHERE CardNumberFormatted = ''
 ORDER BY FullName;
+
+-- kantech_events view (same format as entrapass_events)
+SELECT * FROM kantech_events LIMIT 50;
+
+-- Recent changes to cardholder/card data
+SELECT ChangedAt, ChangeType, FullName, CardNumber, AccessLevel, ProcessedAt
+FROM kantech_change_log
+ORDER BY ChangedAt DESC
+LIMIT 50;
 ```

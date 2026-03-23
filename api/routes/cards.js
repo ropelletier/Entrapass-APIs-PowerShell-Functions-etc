@@ -151,4 +151,24 @@ router.put('/:number', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DELETE /api/v1/cards/:number — remove a card assignment
+// ---------------------------------------------------------------------------
+router.delete('/:number', async (req, res) => {
+  try {
+    const num = escStr(req.params.number);
+    const rows = await query(
+      `SELECT CardNumberFormatted FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Card not found' });
+
+    await execute(
+      `DELETE FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`
+    );
+    res.json({ ok: true, deleted: req.params.number });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

@@ -54,7 +54,7 @@ LEFT OUTER JOIN ItemCard    ic ON c.PkData = ic.FkDataCard
 LEFT OUTER JOIN AccessLevel al ON ic.FkICDataAccessLevel = al.PkData
 `;
 
-const STATE_LABELS = { '0': 'Active', '1': 'Lost/Stolen', '2': 'Inactive' };
+const STATE_LABELS = { '1': 'Active', '2': 'Inactive', '0': 'Lost/Stolen' };
 
 // ---------------------------------------------------------------------------
 // Helper: group flat card rows into user objects with a cards[] array
@@ -113,17 +113,14 @@ function groupUsers(rows) {
 router.get('/', async (req, res) => {
   try {
     const { name, card, state, access_level } = req.query;
-    let where = '';
+    const conditions = [];
 
-    if (name) {
-      where = `WHERE UPPER(c.UserName) LIKE UPPER(${escStr('%' + name + '%')})`;
-    } else if (card) {
-      where = `WHERE n.CardNumberFormatted = ${escStr(card)} OR n.CardNumber = ${escStr(card)}`;
-    } else if (state !== undefined) {
-      where = `WHERE c.State = ${esc(state)}`;
-    } else if (access_level) {
-      where = `WHERE UPPER(al.Description1) LIKE UPPER(${escStr('%' + access_level + '%')})`;
-    }
+    if (name)                conditions.push(`UPPER(c.UserName) LIKE UPPER(${escStr('%' + name + '%')})`);
+    if (card)                conditions.push(`(n.CardNumberFormatted = ${escStr(card)} OR n.CardNumber = ${escStr(card)})`);
+    if (state !== undefined) conditions.push(`c.State = ${esc(state)}`);
+    if (access_level)        conditions.push(`UPPER(al.Description1) LIKE UPPER(${escStr('%' + access_level + '%')})`);
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const rows  = await query(BASE_SQL + where + ' ORDER BY c.UserName, n.CardNumberFormatted');
     const users = groupUsers(rows);

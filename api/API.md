@@ -85,9 +85,9 @@ Cardholders from the EntraPass `Card` table. Each user response includes a `card
 
 | Value | Label |
 |-------|-------|
-| `0` | Active |
-| `1` | Lost/Stolen |
+| `1` | Active |
 | `2` | Inactive |
+| `0` | Lost/Stolen |
 
 ---
 

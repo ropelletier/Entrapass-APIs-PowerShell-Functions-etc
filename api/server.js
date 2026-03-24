@@ -38,12 +38,13 @@ app.get('/health', (req, res) => {
 // ---------------------------------------------------------------------------
 // Protected routes
 // ---------------------------------------------------------------------------
-app.use('/api/v1',        requireApiKey, require('./routes/lookup'));
-app.use('/api/v1/users',  requireApiKey, require('./routes/users'));
-app.use('/api/v1/cards',  requireApiKey, require('./routes/cards'));
-app.use('/api/v1/events', requireApiKey, require('./routes/events'));
-app.use('/api/v1/doors',  requireApiKey, require('./routes/doors'));
-app.use('/api/v1/admin',  requireApiKey, require('./routes/admin'));
+app.use('/api/v1',              requireApiKey, require('./routes/lookup'));
+app.use('/api/v1/users',        requireApiKey, require('./routes/users'));
+app.use('/api/v1/users',        requireApiKey, require('./routes/access-levels'));
+app.use('/api/v1/cards',        requireApiKey, require('./routes/cards'));
+app.use('/api/v1/events',       requireApiKey, require('./routes/events'));
+app.use('/api/v1/doors',        requireApiKey, require('./routes/doors'));
+app.use('/api/v1/admin',        requireApiKey, require('./routes/admin'));
 
 // ---------------------------------------------------------------------------
 // 404 catch-all
@@ -94,6 +95,10 @@ app.listen(PORT, () => {
   console.log('  POST /api/v1/doors/:id/unlock             unlock for N seconds then relock');
   console.log('  POST /api/v1/doors/:id/lock               lock for N seconds then restore');
   console.log('  POST /api/v1/doors/:id/normal             cancel override immediately');
+  console.log('');
+  console.log('  GET  /api/v1/users/:id/access-exceptions   list door exceptions');
+  console.log('  POST /api/v1/users/:id/access-exceptions   add door exception');
+  console.log('  DELETE /api/v1/users/:id/access-exceptions/:id  remove exception');
   console.log('');
   console.log('  GET  /api/v1/access-levels                all access levels');
   console.log('  GET  /api/v1/card-types                   all card types');

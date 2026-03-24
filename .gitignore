@@ -2,16 +2,33 @@
 .env
 .env.backups/
 api/field-map.json
+api/api-keys.json
 
 # Claude Code memory (local dev tooling)
 .claude/
+
+# Node.js
+api/node_modules/
+api/package-lock.json
 
 # Compiled binaries (rebuilt by installer)
 KantechEventService.exe
 KantechApiService.exe
 
-# NuGet packages (binary, large)
+# Third-party binary tools (Procmon, PsExec, etc.)
+utilities/
+Procmon64.exe
+
+# NuGet packages and extracted binaries
 *.nupkg
+MySqlConnector.dll
+System.*.dll
+
+# Runtime logs and watcher output
+logs/
+
+# Procmon capture files
+*.pml
 
 # CSV exports
 *.csv

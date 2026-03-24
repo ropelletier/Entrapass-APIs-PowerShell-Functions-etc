@@ -115,7 +115,7 @@ foreach ($r in $cardDeletes) {
     Write-Host "  DELETE /api/v1/users/$($r.row.PkData)  # $($r.row.UserName)" -ForegroundColor Red
 }
 if ($itemInserts.Count -gt 0) {
-    Write-Host "  NOTE: ItemCard had $($itemInserts.Count) INSERT(s) — access level assignments may need an API endpoint" -ForegroundColor Yellow
+    Write-Host "  NOTE: ItemCard had $($itemInserts.Count) INSERT(s) - access level assignments may need an API endpoint" -ForegroundColor Yellow
 }
 
 Write-Host ''

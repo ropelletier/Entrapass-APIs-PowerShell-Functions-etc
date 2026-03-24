@@ -93,30 +93,46 @@ router.get('/:number', async (req, res) => {
 // POST /api/v1/cards — assign a new card number to an existing cardholder
 //
 // Required body: { cardholderID, cardNumber }
-// Optional:      { cardNumberFormatted }
+// Optional:      { cardNumberFormatted, cardSlot }
+//
+//   cardSlot — 1-based slot position (1 = primary card, 2 = secondary card, etc.)
+//              Defaults to 1. Maps to CardPosition = cardSlot - 1 in ADS.
 //
 // WARNING: Writes directly to the EntraPass ADS CardNumber table.
 // ---------------------------------------------------------------------------
 router.post('/', async (req, res) => {
   try {
-    const { cardholderID, cardNumber, cardNumberFormatted } = req.body;
+    const { cardholderID, cardNumber, cardNumberFormatted, cardSlot } = req.body;
 
     if (!cardholderID) return res.status(400).json({ error: 'cardholderID is required' });
     if (!cardNumber)   return res.status(400).json({ error: 'cardNumber is required' });
 
-    const formatted = cardNumberFormatted || cardNumber;
+    const formatted     = cardNumberFormatted || cardNumber;
+    const slot          = Math.max(1, parseInt(cardSlot || 1, 10));
+    const cardPosition  = slot - 1;  // ADS CardPosition is 0-indexed
+    const pkCard        = esc(parseInt(cardholderID, 10));
 
     // Verify the cardholder exists
-    const existing = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(parseInt(cardholderID, 10))}`);
+    const existing = await query(`SELECT PkData, CardNumberCount FROM Card WHERE PkData = ${pkCard}`);
     if (!existing.length) return res.status(404).json({ error: 'Cardholder not found' });
 
-    const sql = `
-      INSERT INTO CardNumber (PkCard, CardNumber, CardNumberFormatted)
-      VALUES (${esc(parseInt(cardholderID, 10))}, ${escStr(cardNumber)}, ${escStr(formatted)})
-    `;
+    // Make room at the target slot — shift any cards at >= cardPosition up by one.
+    // If no cards occupy that range this is a no-op, so no pre-check needed.
+    await execute(
+      `UPDATE CardNumber SET CardPosition = CardPosition + 1
+       WHERE PkCard = ${pkCard} AND CardPosition >= ${cardPosition}`
+    );
 
-    await execute(sql);
-    res.status(201).json({ ok: true, cardholderID, cardNumber: formatted });
+    await execute(
+      `INSERT INTO CardNumber (PkCard, CardNumber, CardNumberFormatted, CardPosition)
+       VALUES (${pkCard}, ${escStr(cardNumber)}, ${escStr(formatted)}, ${cardPosition})`
+    );
+
+    // Keep CardNumberCount in sync
+    const currentCount = parseInt(existing[0].CardNumberCount || '0', 10);
+    await execute(`UPDATE Card SET CardNumberCount = ${currentCount + 1} WHERE PkData = ${pkCard}`);
+
+    res.status(201).json({ ok: true, cardholderID, cardNumber: formatted, cardSlot: slot });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -153,19 +169,42 @@ router.put('/:number', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // DELETE /api/v1/cards/:number — remove a card assignment
+//
+// After deletion, any remaining cards with a higher CardPosition than the
+// deleted card are shifted down by one so there are no gaps in slot numbering.
+// e.g. deleting slot 1 promotes slot 2 → slot 1, slot 3 → slot 2, etc.
 // ---------------------------------------------------------------------------
 router.delete('/:number', async (req, res) => {
   try {
     const num = escStr(req.params.number);
+
+    // Fetch the card being deleted (need PkCard + CardPosition)
     const rows = await query(
-      `SELECT CardNumberFormatted FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`
+      `SELECT PkCard, CardPosition FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`
     );
     if (!rows.length) return res.status(404).json({ error: 'Card not found' });
+
+    const { PkCard, CardPosition } = rows[0];
+    const deletedSlot = parseInt(CardPosition, 10);
 
     await execute(
       `DELETE FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`
     );
-    res.json({ ok: true, deleted: req.params.number });
+
+    // Shift higher-slot cards down to fill the gap
+    await execute(
+      `UPDATE CardNumber SET CardPosition = CardPosition - 1
+       WHERE PkCard = ${esc(parseInt(PkCard, 10))} AND CardPosition > ${deletedSlot}`
+    );
+
+    // Keep CardNumberCount in sync
+    const cardRows = await query(`SELECT CardNumberCount FROM Card WHERE PkData = ${esc(parseInt(PkCard, 10))}`);
+    if (cardRows.length) {
+      const newCount = Math.max(0, parseInt(cardRows[0].CardNumberCount || '0', 10) - 1);
+      await execute(`UPDATE Card SET CardNumberCount = ${newCount} WHERE PkData = ${esc(parseInt(PkCard, 10))}`);
+    }
+
+    res.json({ ok: true, deleted: req.params.number, slotsShifted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

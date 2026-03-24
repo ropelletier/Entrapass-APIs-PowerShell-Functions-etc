@@ -9,6 +9,8 @@
 
 const { execFile } = require('child_process');
 const { parse }    = require('csv-parse/sync');
+const { logDbWrite } = require('./logger');
+const { captureAndLog } = require('./backup');
 
 const ASQLCMD   = process.env.KANTECH_ASQLCMD;
 const DATA_DIR  = process.env.KANTECH_DATA_DIR;
@@ -90,8 +92,10 @@ function query(sql, connStr) {
  * Run a non-SELECT statement (INSERT / UPDATE / DELETE).
  * Rejects if asqlcmd exits non-zero.
  */
-function execute(sql, connStr) {
+async function execute(sql, connStr) {
   const cs = connStr || DATA_CONN;
+  logDbWrite(sql);
+  await captureAndLog(sql, query);  // snapshot affected rows before the write
   return new Promise((resolve, reject) => {
     execFile(
       ASQLCMD,

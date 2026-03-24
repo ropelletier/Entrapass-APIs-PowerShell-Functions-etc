@@ -20,11 +20,13 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }
 
 const express       = require('express');
 const { requireApiKey } = require('./auth');
+const { requestLogger } = require('./logger');
 
 const app  = express();
 const PORT = process.env.API_PORT || 3000;
 
 app.use(express.json());
+app.use(requestLogger);
 
 // ---------------------------------------------------------------------------
 // Health check — no auth

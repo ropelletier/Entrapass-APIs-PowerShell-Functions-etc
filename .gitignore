@@ -38,3 +38,6 @@ logs/
 
 # Temp files
 *.tmp
+
+# Sync script saved defaults
+.sync-config.json

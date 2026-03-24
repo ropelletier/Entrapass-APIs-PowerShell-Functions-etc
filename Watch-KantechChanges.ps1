@@ -55,9 +55,10 @@ $dataDir  = $env:KANTECH_DATA_DIR
 $connStr  = "Data Source=$dataDir;ServerType=ADS_LOCAL_SERVER;TableType=ADT;Collation=GENERAL_VFP_CI_AS_1252;"
 
 # ---------------------------------------------------------------------------
-# Procmon
+# Procmon — launched via PsExec64 so it runs as SYSTEM with no visible window
 # ---------------------------------------------------------------------------
-$procmonExe  = 'C:\Projects\Kantech\Procmon64.exe'
+$procmonExe  = 'C:\Projects\Kantech\utilities\Procmon64.exe'
+$psexecExe   = 'C:\Projects\Kantech\utilities\PsExec64.exe'
 $procmonPml  = $null   # set below once OutputFile is resolved
 $procmonProc = $null
 
@@ -67,21 +68,29 @@ function Start-Procmon {
         Write-Warning "Procmon64.exe not found at $procmonExe - skipping kernel capture."
         return $null
     }
-    # /AcceptEula    — suppress license dialog
-    # /Quiet         — no GUI prompts
-    # /Minimized     — start minimized
-    # /BackingFile   — capture file path (PML format)
-    $procArgs = @("/AcceptEula", "/Quiet", "/Minimized", "/BackingFile", "`"$PmlPath`"")
-    $proc = Start-Process -FilePath $procmonExe -ArgumentList $procArgs -PassThru -WindowStyle Minimized
-    Write-Host "  Procmon PID $($proc.Id) capturing to: $PmlPath" -ForegroundColor DarkGray
+    if (-not (Test-Path $psexecExe)) {
+        Write-Warning "PsExec64.exe not found at $psexecExe - skipping kernel capture."
+        return $null
+    }
+    # PsExec flags:
+    #   -d          don't wait for process to terminate (detached/background)
+    #   -s          run as SYSTEM account (no desktop session = no window)
+    #   -accepteula suppress PsExec license dialog
+    #   -nobanner   suppress PsExec banner output
+    $psexecArgs = @('-d', '-s', '-accepteula', '-nobanner',
+                    $procmonExe,
+                    '/BackingFile', $PmlPath,
+                    '/Quiet', '/AcceptEula')
+    $proc = Start-Process -FilePath $psexecExe -ArgumentList $psexecArgs -PassThru -WindowStyle Hidden
+    Start-Sleep -Milliseconds 1500   # give Procmon time to initialise before capturing starts
+    Write-Host "  Procmon capturing (SYSTEM/background) to: $PmlPath" -ForegroundColor DarkGray
     return $proc
 }
 
 function Stop-Procmon {
     param([System.Diagnostics.Process]$Proc, [string]$PmlPath)
-    if (-not $Proc -or $Proc.HasExited) { return }
-    # /Terminate saves the backing file and exits cleanly
-    Start-Process -FilePath $procmonExe -ArgumentList "/Terminate" -Wait -WindowStyle Hidden
+    # /Terminate signal — Procmon saves the PML and exits cleanly regardless of how it was launched
+    Start-Process -FilePath $psexecExe -ArgumentList @('-s', '-accepteula', '-nobanner', $procmonExe, '/Terminate') -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
     Write-Host "  Procmon capture saved: $PmlPath" -ForegroundColor DarkGray
     Write-Host "  Open in Procmon and filter: Process Name  contains  EpCe OR EntraPass OR Kantech" -ForegroundColor DarkGray
 }
@@ -133,23 +142,23 @@ function Get-TableSnapshot {
 
 function Diff-Snapshots {
     param(
-        [string]     $Table,
-        [hashtable]  $Before,
-        [hashtable]  $After
+        [string] $Table,
+        $Before,   # OrderedDictionary — no [hashtable] constraint, it's a subtype
+        $After
     )
-    $changes = @()
+    $changes = [System.Collections.Generic.List[object]]::new()
 
     # Rows in After but not Before = INSERT
-    foreach ($key in $After.Keys) {
-        if (-not $Before.ContainsKey($key)) {
-            $changes += @{ operation = 'INSERT'; table = $Table; row = $After[$key] }
+    foreach ($key in @($After.Keys)) {
+        if (-not $Before.Contains($key)) {
+            $changes.Add(@{ operation = 'INSERT'; table = $Table; row = $After[$key] })
         }
     }
 
     # Rows in Before but not After = DELETE
-    foreach ($key in $Before.Keys) {
-        if (-not $After.ContainsKey($key)) {
-            $changes += @{ operation = 'DELETE'; table = $Table; row = $Before[$key] }
+    foreach ($key in @($Before.Keys)) {
+        if (-not $After.Contains($key)) {
+            $changes.Add(@{ operation = 'DELETE'; table = $Table; row = $Before[$key] })
         }
     }
 
@@ -253,7 +262,7 @@ try {
             $newSnap = Get-TableSnapshot -Table $table
             $changes = Diff-Snapshots -Table $table -Before $dbSnapshot[$table] -After $newSnap
 
-            if ($changes.Count -gt 0) {
+            if ($changes -and $changes.Count -gt 0) {
                 $anyChange = $true
                 foreach ($change in $changes) {
                     Write-Host "  [$table] $($change.operation)" -ForegroundColor $(

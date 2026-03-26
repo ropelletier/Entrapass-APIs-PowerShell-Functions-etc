@@ -108,6 +108,18 @@ router.get('/:number', async (req, res) => {
 //   3. UPDATE Card: CardNumberCount++, TransactionId++, TransactionTag=now
 //   4. INSERT + DELETE CardLastAction  ← triggers gateway push to controllers
 // ---------------------------------------------------------------------------
+// Convert a formatted card number (e.g. "8006:51387") to the raw 20-digit
+// integer string that EntraPass stores in CardNumber.
+// Format: facilityHex:cardDecimal → (parseInt(facilityHex,16) * 65536 + cardDecimal).toString().padStart(20,'0')
+// If the value doesn't match the XXXX:NNNNN pattern it is returned unchanged
+// (already raw, or an unknown format).
+function toRawCardNumber(value) {
+  const m = /^([0-9A-Fa-f]{1,4}):(\d{1,5})$/.exec(value);
+  if (!m) return value;
+  const raw = parseInt(m[1], 16) * 65536 + parseInt(m[2], 10);
+  return raw.toString().padStart(20, '0');
+}
+
 router.post('/', async (req, res) => {
   try {
     const { cardholderID, cardNumber, cardNumberFormatted, cardSlot } = req.body;
@@ -116,6 +128,7 @@ router.post('/', async (req, res) => {
     if (!cardNumber)   return res.status(400).json({ error: 'cardNumber is required' });
 
     const formatted    = cardNumberFormatted || cardNumber;
+    const raw          = toRawCardNumber(cardNumber);
     const slot         = Math.max(1, parseInt(cardSlot || 1, 10));
     const cardPosition = slot - 1;
     const pkCard       = esc(parseInt(cardholderID, 10));
@@ -136,15 +149,23 @@ router.post('/', async (req, res) => {
     // 2. Insert new card number (CardDisplayFormat=7, CardDisplayMode=1 match EntraPass defaults)
     await execute(
       `INSERT INTO CardNumber (PkCard, CardNumber, CardNumberFormatted, CardPosition, CardDisplayFormat, CardDisplayMode)
-       VALUES (${pkCard}, ${escStr(cardNumber)}, ${escStr(formatted)}, ${cardPosition}, 7, 1)`
+       VALUES (${pkCard}, ${escStr(raw)}, ${escStr(formatted)}, ${cardPosition}, 7, 1)`
     );
 
-    // 3. Update Card row to reflect new count and bump transaction marker
+    // 3. Update Card row to reflect new count and bump transaction marker.
+    // If inserting at position 0 (slot 1), also sync Card.CardNumber / CardNumberFormatted
+    // which the workstation uses as the primary card display fields.
+    const cardNumberSets = [
+      `CardNumberCount = ${currentCount + 1}`,
+      `TransactionId   = ${currentTxId + 1}`,
+      `TransactionTag  = NOW()`,
+    ];
+    if (cardPosition === 0) {
+      cardNumberSets.push(`CardNumber          = ${escStr(raw)}`);
+      cardNumberSets.push(`CardNumberFormatted = ${escStr(formatted)}`);
+    }
     await execute(
-      `UPDATE Card SET CardNumberCount = ${currentCount + 1},
-                       TransactionId   = ${currentTxId + 1},
-                       TransactionTag  = NOW()
-       WHERE PkData = ${pkCard}`
+      `UPDATE Card SET ${cardNumberSets.join(', ')} WHERE PkData = ${pkCard}`
     );
 
     // 4. Trigger gateway push to door controllers

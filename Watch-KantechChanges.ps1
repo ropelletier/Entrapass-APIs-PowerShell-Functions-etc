@@ -37,7 +37,7 @@
 param(
     [int]    $PollSeconds = 2,
     [string] $OutputFile  = 'C:\Projects\Kantech\logs\watch-changes.jsonl',
-    [string] $Tables      = 'Card,CardNumber,ItemCard,CardAccessGroup,ItemCardAccessGroup,CardLastAction,DeletedCard,AccessLevel,ItemAccessLevel,Audit,Schedule,Controller,Panel,Door,SysOption',
+    [string] $Tables      = 'Card,CardNumber,CardFilter,CardType,ItemCard,CardAccessGroup,ItemCardAccessGroup,CardLastAction,DeletedCard,AccessLevel,ItemAccessLevel,Audit,Schedule,Controller,Panel,Door,SysOption',
     [switch] $NoProcmon
 )
 
@@ -92,7 +92,10 @@ function Stop-Procmon {
     # /Terminate signal — Procmon saves the PML and exits cleanly regardless of how it was launched
     Start-Process -FilePath $psexecExe -ArgumentList @('-s', '-accepteula', '-nobanner', $procmonExe, '/Terminate') -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
     Write-Host "  Procmon capture saved: $PmlPath" -ForegroundColor DarkGray
-    Write-Host "  Open in Procmon and filter: Process Name  contains  EpCe OR EntraPass OR Kantech" -ForegroundColor DarkGray
+    Write-Host "  Open in Procmon and filter: Process Name  contains  EpCe" -ForegroundColor DarkGray
+    Write-Host "                           OR Process Name  contains  EntraPass" -ForegroundColor DarkGray
+    Write-Host "                           OR Process Name  contains  Kantech" -ForegroundColor DarkGray
+    Write-Host "  Key operations to look for: RegQueryValue (card format keys), ReadFile (Card.dat, .adt files)" -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
@@ -215,6 +218,7 @@ foreach ($table in $tableList) {
 
 $svcSnapshot = Get-ServiceSnapshot
 $fileEvents  = [System.Collections.Generic.List[string]]::new()
+$regSnapshot = @{}
 
 Write-Log @{
     type       = 'BASELINE'
@@ -224,23 +228,39 @@ Write-Log @{
 }
 
 # ---------------------------------------------------------------------------
-# File system watcher
+# File system watchers — Server_CE/Data, Gateway buffer, SmartLink cache
 # ---------------------------------------------------------------------------
-$watcher = New-Object System.IO.FileSystemWatcher
-$watcher.Path                = $dataDir
-$watcher.Filter              = '*.*'
-$watcher.NotifyFilter        = [System.IO.NotifyFilters]::LastWrite -bor [System.IO.NotifyFilters]::FileName
-$watcher.IncludeSubdirectories = $false
-$watcher.EnableRaisingEvents = $true
+$watchDirs = @(
+    @{ Path = $dataDir;                                                                    Label = 'ServerData';   Recurse = $false },
+    @{ Path = 'C:\Program Files (x86)\Kantech\Gateway_CE\Generaldata\Buffer';             Label = 'GatewayBuf';   Recurse = $false },
+    @{ Path = 'C:\Program Files (x86)\Kantech\Gateway_CE\Generaldata\Buffer\Backup';      Label = 'GatewayBak';   Recurse = $false },
+    @{ Path = 'C:\Program Files (x86)\Kantech\Smartlink_CE\Data';                         Label = 'SmartlinkData'; Recurse = $false },
+    @{ Path = 'C:\Users\ropelletier\AppData\Local\Entrapass';                             Label = 'EntrapassApp'; Recurse = $true  }
+)
+
+$watchers = [System.Collections.Generic.List[object]]::new()
 
 $fileAction = {
-    $path = $Event.SourceEventArgs.FullPath
-    $type = $Event.SourceEventArgs.ChangeType
-    $script:fileEvents.Add("$type|$path")
+    $path  = $Event.SourceEventArgs.FullPath
+    $type  = $Event.SourceEventArgs.ChangeType
+    $label = $Event.MessageData
+    $script:fileEvents.Add("$type|[$label] $path")
 }
-Register-ObjectEvent $watcher Changed -Action $fileAction | Out-Null
-Register-ObjectEvent $watcher Created -Action $fileAction | Out-Null
-Register-ObjectEvent $watcher Renamed -Action $fileAction | Out-Null
+
+foreach ($wd in $watchDirs) {
+    if (-not (Test-Path $wd.Path)) { continue }
+    $w = New-Object System.IO.FileSystemWatcher
+    $w.Path                  = $wd.Path
+    $w.Filter                = '*.*'
+    $w.NotifyFilter          = [System.IO.NotifyFilters]::LastWrite -bor [System.IO.NotifyFilters]::FileName
+    $w.IncludeSubdirectories = $wd.Recurse
+    $w.EnableRaisingEvents   = $true
+    Register-ObjectEvent $w Changed -Action $fileAction -MessageData $wd.Label | Out-Null
+    Register-ObjectEvent $w Created -Action $fileAction -MessageData $wd.Label | Out-Null
+    Register-ObjectEvent $w Renamed -Action $fileAction -MessageData $wd.Label | Out-Null
+    $watchers.Add($w)
+    Write-Host "  Watching files: $($wd.Label) ($($wd.Path))" -ForegroundColor DarkGray
+}
 
 Write-Host ''
 Write-Host "Baseline complete. Watching for changes... (Ctrl+C to stop)" -ForegroundColor Green
@@ -323,6 +343,33 @@ try {
             }
         }
 
+        # --- Registry snapshot (card format / display keys) ---
+        try {
+            $regPaths = @(
+                'HKLM:\SOFTWARE\WOW6432Node\Kantech',
+                'HKLM:\SOFTWARE\WOW6432Node\Tyco',
+                'HKCU:\SOFTWARE\Kantech',
+                'HKCU:\SOFTWARE\Tyco'
+            )
+            foreach ($rp in $regPaths) {
+                if (Test-Path $rp) {
+                    $vals = Get-ItemProperty $rp -ErrorAction SilentlyContinue
+                    if ($vals) {
+                        $parts = $vals.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } | ForEach-Object { "$($_.Name)=$($_.Value)" } | Sort-Object
+                        $key   = "REG|$rp|" + ($parts -join '|')
+                        if (-not $regSnapshot.ContainsKey($rp) -or $regSnapshot[$rp] -ne $key) {
+                            if ($regSnapshot.ContainsKey($rp)) {
+                                $anyChange = $true
+                                Write-Host "  [REGISTRY] Changed: $rp" -ForegroundColor DarkMagenta
+                                Write-Log @{ type = 'REGISTRY_CHANGE'; path = $rp; poll = $pollCount }
+                            }
+                            $regSnapshot[$rp] = $key
+                        }
+                    }
+                }
+            }
+        } catch { }
+
         # --- Windows Event Log (last 5s) ---
         try {
             $since = (Get-Date).AddSeconds(-($PollSeconds + 1))
@@ -351,8 +398,7 @@ try {
         }
     }
 } finally {
-    $watcher.EnableRaisingEvents = $false
-    $watcher.Dispose()
+    foreach ($w in $watchers) { $w.EnableRaisingEvents = $false; $w.Dispose() }
     Unregister-Event -SourceIdentifier * -ErrorAction SilentlyContinue
 
     if (-not $NoProcmon -and $procmonProc) {

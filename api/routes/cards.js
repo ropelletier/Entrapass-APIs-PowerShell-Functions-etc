@@ -9,13 +9,17 @@
  * GET  /api/v1/cards/:number            single card by formatted or raw number
  * POST /api/v1/cards                    assign a new card to a cardholder
  * PUT  /api/v1/cards/:number            update card status fields
+ * DELETE /api/v1/cards/:number          remove a card assignment
+ *
+ * Write operations (POST/PUT/DELETE) go through SmartService so changes are
+ * immediately visible in the EntraPass workstation.
  */
 
 'use strict';
 
 const router = require('express').Router();
-const { query, execute, esc, escStr } = require('../db');
-const { notifyGateway } = require('../card-helpers');
+const { query, esc, escStr } = require('../db');
+const ss = require('../smartservice');
 
 // ---------------------------------------------------------------------------
 // Base SELECT — CardNumber joined to Card and AccessLevel
@@ -100,26 +104,10 @@ router.get('/:number', async (req, res) => {
 // Optional:      { cardNumberFormatted, cardSlot }
 //
 //   cardSlot — 1-based slot position (1 = primary card, 2 = secondary card, etc.)
-//              Defaults to 1. Maps to CardPosition = cardSlot - 1 in ADS.
+//              Defaults to 1. Max 5 slots.
 //
-// Replicates the full EntraPass write sequence (reverse-engineered):
-//   1. Shift existing CardNumber positions up to make room
-//   2. INSERT CardNumber row (with CardDisplayFormat=7, CardDisplayMode=1)
-//   3. UPDATE Card: CardNumberCount++, TransactionId++, TransactionTag=now
-//   4. INSERT + DELETE CardLastAction  ← triggers gateway push to controllers
+// Writes through SmartService so the workstation sees the change immediately.
 // ---------------------------------------------------------------------------
-// Convert a formatted card number (e.g. "8006:51387") to the raw 20-digit
-// integer string that EntraPass stores in CardNumber.
-// Format: facilityHex:cardDecimal → (parseInt(facilityHex,16) * 65536 + cardDecimal).toString().padStart(20,'0')
-// If the value doesn't match the XXXX:NNNNN pattern it is returned unchanged
-// (already raw, or an unknown format).
-function toRawCardNumber(value) {
-  const m = /^([0-9A-Fa-f]{1,4}):(\d{1,5})$/.exec(value);
-  if (!m) return value;
-  const raw = parseInt(m[1], 16) * 65536 + parseInt(m[2], 10);
-  return raw.toString().padStart(20, '0');
-}
-
 router.post('/', async (req, res) => {
   try {
     const { cardholderID, cardNumber, cardNumberFormatted, cardSlot } = req.body;
@@ -127,52 +115,59 @@ router.post('/', async (req, res) => {
     if (!cardholderID) return res.status(400).json({ error: 'cardholderID is required' });
     if (!cardNumber)   return res.status(400).json({ error: 'cardNumber is required' });
 
-    const formatted    = cardNumberFormatted || cardNumber;
-    const raw          = toRawCardNumber(cardNumber);
-    const slot         = Math.max(1, parseInt(cardSlot || 1, 10));
-    const cardPosition = slot - 1;
-    const pkCard       = esc(parseInt(cardholderID, 10));
+    const formatted = cardNumberFormatted || cardNumber;
+    const slot      = Math.max(1, Math.min(5, parseInt(cardSlot || 1, 10)));
+    const pkCard    = parseInt(cardholderID, 10);
 
-    // Verify cardholder exists and read current transaction state
-    const existing = await query(`SELECT PkData, CardNumberCount, TransactionId FROM Card WHERE PkData = ${pkCard}`);
+    // Verify cardholder exists
+    const existing = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(pkCard)}`);
     if (!existing.length) return res.status(404).json({ error: 'Cardholder not found' });
 
-    const currentCount = parseInt(existing[0].CardNumberCount || '0', 10);
-    const currentTxId  = parseInt(existing[0].TransactionId  || '0', 10);
+    // Read current card to find the first empty slot if needed, and shift existing cards
+    const currentXml = await ss.getCard(pkCard);
 
-    // 1. Make room at the target slot
-    await execute(
-      `UPDATE CardNumber SET CardPosition = CardPosition + 1
-       WHERE PkCard = ${pkCard} AND CardPosition >= ${cardPosition}`
-    );
-
-    // 2. Insert new card number (CardDisplayFormat=7, CardDisplayMode=1 match EntraPass defaults)
-    await execute(
-      `INSERT INTO CardNumber (PkCard, CardNumber, CardNumberFormatted, CardPosition, CardDisplayFormat, CardDisplayMode)
-       VALUES (${pkCard}, ${escStr(raw)}, ${escStr(formatted)}, ${cardPosition}, 7, 1)`
-    );
-
-    // 3. Update Card row to reflect new count and bump transaction marker.
-    // If inserting at position 0 (slot 1), also sync Card.CardNumber / CardNumberFormatted
-    // which the workstation uses as the primary card display fields.
-    const cardNumberSets = [
-      `CardNumberCount = ${currentCount + 1}`,
-      `TransactionId   = ${currentTxId + 1}`,
-      `TransactionTag  = NOW()`,
-    ];
-    if (cardPosition === 0) {
-      cardNumberSets.push(`CardNumber          = ${escStr(raw)}`);
-      cardNumberSets.push(`CardNumberFormatted = ${escStr(formatted)}`);
+    // Find which slots are occupied
+    const occupied = {};
+    for (let i = 1; i <= 5; i++) {
+      const m = currentXml.match(new RegExp(`<CardNumber${i}>([^<]+)</CardNumber${i}>`));
+      if (m && m[1]) occupied[i] = m[1];
     }
-    await execute(
-      `UPDATE Card SET ${cardNumberSets.join(', ')} WHERE PkData = ${pkCard}`
-    );
 
-    // 4. Trigger gateway push to door controllers
-    await notifyGateway(pkCard);
+    // If the target slot is occupied, shift cards up to make room
+    if (occupied[slot]) {
+      const fields = {};
+      // Shift from slot 5 down to target slot
+      for (let i = 4; i >= slot; i--) {
+        if (occupied[i]) {
+          fields[`CardNumber${i + 1}`]        = occupied[i];
+          fields[`DisplayCardNumber${i + 1}`] = 'True';
+          // Preserve state for shifted card
+          const stateMatch = currentXml.match(new RegExp(`<CardState${i}>([^<]*)</CardState${i}>`));
+          if (stateMatch) fields[`CardState${i + 1}`] = stateMatch[1];
+          const traceMatch = currentXml.match(new RegExp(`<Trace${i}>([^<]*)</Trace${i}>`));
+          if (traceMatch) fields[`Trace${i + 1}`] = traceMatch[1];
+        }
+      }
+      // Set the new card in the target slot
+      fields[`CardNumber${slot}`]        = formatted;
+      fields[`DisplayCardNumber${slot}`] = 'True';
+      fields[`CardState${slot}`]         = 'Valid';
+      fields[`Trace${slot}`]             = 'False';
 
-    res.status(201).json({ ok: true, cardholderID, cardNumber: formatted, cardSlot: slot });
+      await ss.updateCard(pkCard, fields);
+    } else {
+      // Slot is empty, just set it
+      await ss.updateCard(pkCard, {
+        [`CardNumber${slot}`]:        formatted,
+        [`DisplayCardNumber${slot}`]: 'True',
+        [`CardState${slot}`]:         'Valid',
+        [`Trace${slot}`]:             'False',
+      });
+    }
+
+    res.status(201).json({ ok: true, cardholderID: pkCard, cardNumber: formatted, cardSlot: slot });
   } catch (err) {
+    console.error('POST /cards error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -181,53 +176,58 @@ router.post('/', async (req, res) => {
 // PUT /api/v1/cards/:number — update card status
 //
 // Updatable: lostStolen, deactivated, endDate, trace
-// trace=true  sets CardNumber.Trace=1 and Card.IsTrace=1
-// trace=false sets CardNumber.Trace=0 and Card.IsTrace=0 if no other card is traced
-// Also bumps TransactionId/TransactionTag and triggers gateway notification.
+// Writes through SmartService so the workstation sees the change immediately.
+//
+// SmartService CardState (overall, numeric): 0=Valid, 1=Invalid, 2=StolenLost
+// Trace uses per-slot fields (Trace1-5) and overall (Trace).
+// EndDate uses per-slot fields (EndDate1-5, UsingEndDate1-5).
 // ---------------------------------------------------------------------------
 router.put('/:number', async (req, res) => {
   try {
     const num = req.params.number;
-    const { lostStolen, deactivated, endDate, number, numberRaw, trace } = req.body;
-    const sets = [];
+    const { lostStolen, deactivated, endDate, trace } = req.body;
 
-    if (number      !== undefined) sets.push(`CardNumberFormatted = ${escStr(number)}`);
-    if (numberRaw   !== undefined) sets.push(`CardNumber = ${escStr(numberRaw)}`);
-    if (lostStolen  !== undefined) sets.push(`LostStolen = ${lostStolen  ? 1 : 0}`);
-    if (deactivated !== undefined) sets.push(`Deactivated = ${deactivated ? 1 : 0}`);
-    if (endDate     !== undefined) sets.push(`EndDate = ${escStr(endDate)}, UseEndDate = 1`);
-    if (trace       !== undefined) sets.push(`Trace = ${trace ? 1 : 0}`);
-
-    if (!sets.length) return res.status(400).json({ error: 'No recognised fields to update' });
-
-    await execute(
-      `UPDATE CardNumber SET ${sets.join(', ')}
-       WHERE CardNumberFormatted = ${escStr(num)} OR CardNumber = ${escStr(num)}`
-    );
-
-    // Bump transaction marker on the Card row and trigger gateway
-    const cardRow = await query(
-      `SELECT c.PkData, c.TransactionId FROM Card c
-       JOIN CardNumber n ON c.PkData = n.PkCard
-       WHERE n.CardNumberFormatted = ${escStr(num)} OR n.CardNumber = ${escStr(num)}`
-    );
-    if (cardRow.length) {
-      const pkCard      = esc(parseInt(cardRow[0].PkData, 10));
-      const currentTxId = parseInt(cardRow[0].TransactionId || '0', 10);
-
-      // Sync Card.IsTrace: 1 if any card for this cardholder has Trace=1
-      const cardSets = [`TransactionId = ${currentTxId + 1}`, `TransactionTag = NOW()`];
-      if (trace !== undefined) {
-        const traced = await query(`SELECT COUNT(*) AS cnt FROM CardNumber WHERE PkCard = ${pkCard} AND Trace = 1`);
-        cardSets.push(`IsTrace = ${parseInt(traced[0].cnt, 10) > 0 ? 1 : 0}`);
-      }
-
-      await execute(`UPDATE Card SET ${cardSets.join(', ')} WHERE PkData = ${pkCard}`);
-      await notifyGateway(pkCard);
+    if (lostStolen === undefined && deactivated === undefined &&
+        endDate === undefined && trace === undefined) {
+      return res.status(400).json({ error: 'No recognised fields to update' });
     }
 
-    res.json({ ok: true, number: num, updated: sets.length });
+    // Find the cardholder and slot for this card number
+    const rows = await query(
+      `SELECT n.PkCard, n.CardPosition FROM CardNumber n
+       WHERE n.CardNumberFormatted = ${escStr(num)} OR n.CardNumber = ${escStr(num)}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Card not found' });
+
+    const pkCard = parseInt(rows[0].PkCard, 10);
+    const slot   = parseInt(rows[0].CardPosition, 10) + 1;  // 0-based → 1-based
+
+    // Build SmartService update fields
+    const fields = {};
+    let updated = 0;
+
+    // Per-slot CardState: "Valid" or "StolenLost" (string enum name)
+    if (lostStolen !== undefined || deactivated !== undefined) {
+      fields[`CardState${slot}`] = (lostStolen || deactivated) ? 'StolenLost' : 'Valid';
+      updated++;
+    }
+
+    if (trace !== undefined) {
+      fields[`Trace${slot}`] = trace ? 'True' : 'False';
+      updated++;
+    }
+
+    if (endDate !== undefined) {
+      fields[`EndDate${slot}`]      = endDate;
+      fields[`UsingEndDate${slot}`] = 'True';
+      updated++;
+    }
+
+    await ss.updateCard(pkCard, fields);
+
+    res.json({ ok: true, number: num, updated });
   } catch (err) {
+    console.error('PUT /cards error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -235,52 +235,65 @@ router.put('/:number', async (req, res) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/v1/cards/:number — remove a card assignment
 //
-// Replicates the full EntraPass write sequence (reverse-engineered):
-//   1. DELETE the CardNumber row
-//   2. Shift remaining cards at higher positions down by one
-//   3. UPDATE Card: CardNumberCount--, TransactionId++, TransactionTag=now
-//   4. INSERT + DELETE CardLastAction  ← triggers gateway push to controllers
+// Clears the card slot via SmartService and shifts higher-slot cards down.
 // ---------------------------------------------------------------------------
 router.delete('/:number', async (req, res) => {
   try {
-    const num = escStr(req.params.number);
+    const num = req.params.number;
 
-    // Fetch the card being deleted (need PkCard + CardPosition)
+    // Find the cardholder and slot for this card
     const rows = await query(
-      `SELECT PkCard, CardPosition FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`
+      `SELECT PkCard, CardPosition FROM CardNumber
+       WHERE CardNumberFormatted = ${escStr(num)} OR CardNumber = ${escStr(num)}`
     );
     if (!rows.length) return res.status(404).json({ error: 'Card not found' });
 
-    const pkCard      = esc(parseInt(rows[0].PkCard, 10));
-    const deletedSlot = parseInt(rows[0].CardPosition, 10);
+    const pkCard      = parseInt(rows[0].PkCard, 10);
+    const deletedSlot = parseInt(rows[0].CardPosition, 10) + 1;  // 0-based → 1-based
 
-    // Read current Card transaction state before modifying
-    const cardRows = await query(`SELECT CardNumberCount, TransactionId FROM Card WHERE PkData = ${pkCard}`);
-    const currentCount = cardRows.length ? parseInt(cardRows[0].CardNumberCount || '0', 10) : 0;
-    const currentTxId  = cardRows.length ? parseInt(cardRows[0].TransactionId  || '0', 10) : 0;
+    // Read current card state from SmartService
+    const currentXml = await ss.getCard(pkCard);
 
-    // 1. Delete the card number
-    await execute(`DELETE FROM CardNumber WHERE CardNumberFormatted = ${num} OR CardNumber = ${num}`);
+    // Collect all occupied slots
+    const occupied = {};
+    for (let i = 1; i <= 5; i++) {
+      const m = currentXml.match(new RegExp(`<CardNumber${i}>([^<]+)</CardNumber${i}>`));
+      if (m && m[1]) occupied[i] = m[1];
+    }
 
-    // 2. Shift higher-slot cards down to fill the gap
-    await execute(
-      `UPDATE CardNumber SET CardPosition = CardPosition - 1
-       WHERE PkCard = ${pkCard} AND CardPosition > ${deletedSlot}`
-    );
+    // Build update: shift cards above the deleted slot down, clear the last occupied slot
+    const fields = {};
 
-    // 3. Update Card row
-    await execute(
-      `UPDATE Card SET CardNumberCount = ${Math.max(0, currentCount - 1)},
-                       TransactionId   = ${currentTxId + 1},
-                       TransactionTag  = NOW()
-       WHERE PkData = ${pkCard}`
-    );
+    // Shift cards down
+    for (let i = deletedSlot; i <= 4; i++) {
+      if (occupied[i + 1]) {
+        fields[`CardNumber${i}`]        = occupied[i + 1];
+        fields[`DisplayCardNumber${i}`] = 'True';
+        // Preserve state
+        const stateMatch = currentXml.match(new RegExp(`<CardState${i + 1}>([^<]*)</CardState${i + 1}>`));
+        if (stateMatch) fields[`CardState${i}`] = stateMatch[1];
+        const traceMatch = currentXml.match(new RegExp(`<Trace${i + 1}>([^<]*)</Trace${i + 1}>`));
+        if (traceMatch) fields[`Trace${i}`] = traceMatch[1];
+      } else {
+        // No card above — clear this slot
+        fields[`CardNumber${i}`]        = '';
+        fields[`DisplayCardNumber${i}`] = 'False';
+        break;
+      }
+    }
 
-    // 4. Trigger gateway push to door controllers
-    await notifyGateway(pkCard);
+    // Clear the highest previously occupied slot (it shifted down or is the deleted one)
+    const maxOccupied = Math.max(...Object.keys(occupied).map(Number));
+    if (maxOccupied >= deletedSlot) {
+      fields[`CardNumber${maxOccupied}`]        = '';
+      fields[`DisplayCardNumber${maxOccupied}`] = 'False';
+    }
 
-    res.json({ ok: true, deleted: req.params.number, slotsShifted: true });
+    await ss.updateCard(pkCard, fields);
+
+    res.json({ ok: true, deleted: num, slotsShifted: true });
   } catch (err) {
+    console.error('DELETE /cards error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

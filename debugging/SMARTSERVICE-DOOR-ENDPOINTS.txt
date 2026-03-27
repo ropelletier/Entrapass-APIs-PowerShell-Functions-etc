@@ -1,0 +1,149 @@
+KANTECH SMARTSERVICE DOOR CONTROL API ENDPOINTS
+================================================
+
+Base URL: http://localhost:8801/SmartService/
+
+EXPLORATION RESULTS
+===================
+
+The Kantech SmartService WCF REST API provides comprehensive door control operations 
+through the IDoorService interface at Tyco.Entrapass.SmartService.Client.Business.Services.
+
+Key Findings:
+=============
+
+1. DOOR LOCK/UNLOCK OPERATIONS
+   - UnlockAsync(doorId: Int32)
+   - LockAsync(doorId: Int32)  
+   - UnlockTemporaryAsync(doorId: Int32, duration: TimeSpan) - Momentary unlock
+
+2. DOOR ARM/DISARM OPERATIONS
+   - ArmAsync(doorId: Int32, forceSend?: bool)
+   - DisarmAsync(doorId: Int32, forceSend?: bool)
+
+3. READER CONTROL OPERATIONS
+   - EnableReaderAsync(doorId: Int32, force: bool)
+   - DisableReaderAsync(doorId: Int32, force: bool)
+
+4. OUTPUT CONTROL OPERATIONS
+   - ActiveOutputAsync(outputId: Int32) - Activate relay/buzzer
+   - DeactiveOutputAsync(outputId: Int32) - Deactivate relay/buzzer
+
+5. SCHEDULE OPERATIONS
+   - DoorBackToScheduleAsync(doorId: Int32)
+   - DoorContactBackToScheduleAsync(doorId: Int32)
+   - ModifyScheduleAsync(doorId: Int32, scheduleId: Int32)
+
+6. ACCESS CONTROL OPERATIONS
+   - OneTimeAccessAsync(doorId: Int32) - Grant temporary access
+
+7. QUERY OPERATIONS
+   - GetListAsync() - Get all doors
+   - GetAsync(doorId: Int32) - Get specific door
+   - GetFeaturesAsync(doorId: Int32) - Get door features
+   - GetLastAccessAsync(doorId: Int32) - Last access event
+   - GetOutputListAsync(doorId: Int32) - Associated outputs
+   - GetScheduleListAsync(doorId: Int32) - Access schedules
+   - GetAccessLevelAsync(doorId: Int32) - Access levels
+
+SUGGESTED REST ENDPOINT STRUCTURE
+==================================
+
+Query Endpoints:
+  GET    /api/doors
+  GET    /api/doors/{doorId}
+  GET    /api/doors/{doorId}/features
+  GET    /api/doors/{doorId}/last-access
+  GET    /api/doors/{doorId}/outputs
+  GET    /api/doors/{doorId}/schedules
+  GET    /api/doors/{doorId}/access-level
+
+Control Endpoints:
+  POST   /api/doors/{doorId}/unlock
+  POST   /api/doors/{doorId}/lock
+  POST   /api/doors/{doorId}/unlock-temporary
+  POST   /api/doors/{doorId}/arm
+  POST   /api/doors/{doorId}/disarm
+  POST   /api/doors/{doorId}/enable-reader
+  POST   /api/doors/{doorId}/disable-reader
+  POST   /api/outputs/{outputId}/activate
+  POST   /api/outputs/{outputId}/deactivate
+  POST   /api/doors/{doorId}/one-time-access
+  POST   /api/doors/{doorId}/back-to-schedule
+  POST   /api/doors/{doorId}/contact-back-to-schedule
+  POST   /api/doors/{doorId}/modify-schedule
+
+AVAILABLE SERVICES
+==================
+
+The SmartService Client DLL contains 60+ service interfaces including:
+  - IDoorService (door control)
+  - IControllerService (device management)
+  - IAccessLevelService (permissions)
+  - IScheduleService (time schedules)
+  - IAuthenticationService (login/logout)
+  - IEventService (event logging)
+  - ICardService (credential management)
+  - And many more...
+
+DATA STRUCTURES
+===============
+
+DoorModel contains extensive properties for:
+  - Door identification (Id, PrimaryName, SecondaryName)
+  - Lock control (DoorLockMode, UnlockTime, UnlockOnRex)
+  - Contact monitoring (FkDataDoorContact, DoorContactSchedule)
+  - Alarm system (AlarmOnDotl, ArmingAccessLevel)
+  - Interlocks and relays (FkInterlockContact, FkRelayLockingDevice)
+  - External system integration (ExternalDoorDescription, VideoView)
+
+IMPLEMENTATION STRATEGY
+=======================
+
+To route door commands through SmartService instead of direct gateway calls:
+
+1. Implement SmartService REST wrapper endpoints
+2. Map door control operations:
+   - Unlock -> POST /api/doors/{doorId}/unlock
+   - Lock -> POST /api/doors/{doorId}/lock
+   - Momentary Unlock -> POST /api/doors/{doorId}/unlock-temporary (with duration)
+   
+3. Add authentication:
+   - Leverage IAuthenticationService for SmartService login
+   - Maintain session tokens for API requests
+
+4. Error handling:
+   - Wrap operations in try/catch for device offline scenarios
+   - Return CommandResultModel with success/error status
+
+5. Advantages over direct gateway calls:
+   - Centralized SmartService authentication
+   - Automatic sync with EntraPass database
+   - Built-in audit logging
+   - Schedule compliance checking
+   - Access level validation
+
+ASSEMBLY LOCATIONS
+==================
+
+Source DLLs analyzed:
+  - C:\Program Files (x86)\Kantech\EntraPassWeb\
+    Tyco.Entrapass.SmartService.Client.dll (2.2 MB)
+  
+  - C:\Program Files (x86)\Kantech\SmartService\
+    Kantech.SmartLinkSDK.dll (32-bit, couldn't load in 64-bit PowerShell)
+    SmartSdkDll.dll (32-bit, couldn't load in 64-bit PowerShell)
+
+SCRIPTS CREATED
+===============
+
+1. reflect-sdk.ps1 - Loads DLLs and encrypts passwords
+2. explore-door-api.ps1 - Initial DLL exploration
+3. explore-door-api-v2.ps1 - AppDomain assembly enumeration
+4. explore-door-api-v3.ps1 - Full namespace and type inspection
+5. extract-door-methods.ps1 - Door service method extraction
+6. get-service-endpoints.ps1 - Service endpoint mapping
+7. examine-wcf-service.ps1 - WCF interface analysis
+8. SmartService-Door-API-Report.ps1 - Comprehensive API report
+
+All PowerShell scripts are located in: C:\Projects\kantech\

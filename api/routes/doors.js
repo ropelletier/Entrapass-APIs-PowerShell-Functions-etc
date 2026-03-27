@@ -1,56 +1,54 @@
 /**
- * routes/doors.js — Door lock/unlock control
+ * routes/doors.js — Door control
  *
  * GET  /api/v1/doors                  list all doors with current mode
  * GET  /api/v1/doors/:id              single door
- * POST /api/v1/doors/:id/unlock       unlock for N seconds (default 5), then relock
- * POST /api/v1/doors/:id/lock         lock for N seconds (default 5), then restore
- * POST /api/v1/doors/:id/normal       cancel override, restore normal mode immediately
+ * POST /api/v1/doors/:id/unlock       momentary unlock for N seconds (default 5)
+ * POST /api/v1/doors/:id/lock         lock (secured) until /normal
+ * POST /api/v1/doors/:id/normal       restore to schedule
+ * POST /api/v1/doors/:id/arm          arm door alarm
+ * POST /api/v1/doors/:id/disarm       disarm door alarm
+ * POST /api/v1/doors/:id/one-time-access  grant single access
  *
- * OperationMode values (KT-400 protocol):
- *   0 = Normal    — door follows its unlock schedule
- *   1 = Secured   — always locked regardless of schedule
- *   2 = Unsecured — always unlocked regardless of schedule
- *
- * NOTE: This writes to the EntraPass ADS database. The EntraPass Server service
- * must be running to propagate the mode change to the door controller hardware.
- * Expect up to a few seconds of delay before the physical door responds.
- * If the API service restarts while an override is active, the revert timer is
- * lost and the door stays in the overridden state until /normal is called.
+ * Control operations go through SmartService so the command reaches the
+ * door controller directly (no ADS polling delay) and generates proper
+ * EntraPass audit events.
  */
 
 'use strict';
 
 const router = require('express').Router();
-const { query, execute, esc } = require('../db');
+const { query, esc } = require('../db');
+const ss = require('../smartservice');
 
-const MODE = { normal: 0, locked: 1, unlocked: 2 };
 const MODE_LABEL = { 0: 'normal', 1: 'locked', 2: 'unlocked' };
-
-// In-memory store: doorId (string) → { action, originalMode, endsAt, timer }
-const overrides = new Map();
-
-function cancelOverride(doorId) {
-  const o = overrides.get(doorId);
-  if (o) {
-    clearTimeout(o.timer);
-    overrides.delete(doorId);
-  }
-  return o || null;
-}
 
 function formatDoor(r) {
   const modeCode = parseInt(r.mode, 10);
-  const ov       = overrides.get(String(r.id));
   return {
     id:       r.id,
     name:     r.name,
     mode:     MODE_LABEL[modeCode] || String(modeCode),
     modeCode,
-    override: ov
-      ? { action: ov.action, endsAt: ov.endsAt.toISOString(), secondsRemaining: Math.max(0, Math.round((ov.endsAt - Date.now()) / 1000)) }
-      : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// SmartService door command helper
+// ---------------------------------------------------------------------------
+async function ssDoorCommand(endpoint, doorId, extraParams = {}) {
+  const params = { id: String(doorId), ...extraParams };
+  const res = await ss.ssCall('PUT', endpoint, { query: params, body: '', contentType: 'application/xml' });
+  if (res.status !== 200) {
+    throw new Error(`SmartService ${endpoint} returned ${res.status}: ${res.body}`);
+  }
+  // Response is <ServiceCommandResult>OK</ServiceCommandResult> or error text
+  const match = res.body.match(/<ServiceCommandResult>([^<]*)<\/ServiceCommandResult>/);
+  const result = match ? match[1] : res.body;
+  if (result !== 'OK') {
+    throw new Error(`SmartService ${endpoint}: ${result}`);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +70,7 @@ router.get('/', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/:id', async (req, res) => {
   try {
-    const id   = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
     const rows = await query(
       `SELECT PkData AS id, Description1 AS name, OperationMode AS mode FROM Door WHERE PkData = ${id}`
@@ -85,73 +83,65 @@ router.get('/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Shared helper: apply a mode change, schedule revert
+// POST /api/v1/doors/:id/unlock — momentary unlock for N seconds
+// Body: { "seconds": 5 }  (default 5, max 3600)
+// Uses SmartService TemporarilyUnlockDoor — the controller handles the revert.
 // ---------------------------------------------------------------------------
-async function applyOverride(req, res, action) {
-  const id      = parseInt(req.params.id, 10);
-  const seconds = Math.max(1, parseInt((req.body && req.body.seconds) || req.query.seconds || 5, 10));
-  if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+async function handleUnlock(req, res) {
+  try {
+    const id      = parseInt(req.params.id, 10);
+    const seconds = Math.max(1, Math.min(3600, parseInt((req.body && req.body.seconds) || req.query.seconds || 5, 10)));
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
 
-  // Fetch current state
-  const rows = await query(
-    `SELECT PkData AS id, Description1 AS name, OperationMode AS mode FROM Door WHERE PkData = ${id}`
-  );
-  if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const rows = await query(
+      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
 
-  // Determine what mode to restore to when the timer fires:
-  // if there's already an active override, restore to *that* override's originalMode
-  // so we always return to what the door was before any API intervention.
-  const existing     = overrides.get(String(id));
-  const originalMode = existing ? existing.originalMode : parseInt(rows[0].mode, 10);
-  const newMode      = action === 'unlock' ? MODE.unlocked : MODE.locked;
+    await ssDoorCommand('TemporarilyUnlockDoor', id, { delay: String(seconds) });
 
-  // Cancel existing timer (don't revert yet — we're about to set a new state)
-  cancelOverride(String(id));
-
-  // Apply new mode
-  await execute(`UPDATE Door SET OperationMode = ${newMode} WHERE PkData = ${id}`);
-
-  // Schedule revert
-  const endsAt = new Date(Date.now() + seconds * 1000);
-  const timer  = setTimeout(async () => {
-    try {
-      await execute(`UPDATE Door SET OperationMode = ${originalMode} WHERE PkData = ${id}`);
-    } catch (e) {
-      console.error(`[doors] Revert failed for door ${id}:`, e.message);
-    }
-    overrides.delete(String(id));
-  }, seconds * 1000);
-
-  overrides.set(String(id), { action, originalMode, endsAt, timer });
-
-  res.json({
-    ok:            true,
-    doorId:        id,
-    doorName:      rows[0].name,
-    action,
-    mode:          MODE_LABEL[newMode],
-    seconds,
-    revertsAt:     endsAt.toISOString(),
-    revertsToMode: MODE_LABEL[originalMode] || String(originalMode),
-  });
+    res.json({
+      ok:       true,
+      doorId:   id,
+      doorName: rows[0].name,
+      action:   'unlock',
+      seconds,
+      revertsAt: new Date(Date.now() + seconds * 1000).toISOString(),
+    });
+  } catch (err) {
+    console.error('POST /doors/unlock error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 }
+router.get('/:id/unlock',  handleUnlock);
+router.post('/:id/unlock', handleUnlock);
 
 // ---------------------------------------------------------------------------
-// GET|POST /api/v1/doors/:id/unlock
-// Query/body: seconds=5  (default 5)
+// POST /api/v1/doors/:id/lock — lock door (secured) until /normal
 // ---------------------------------------------------------------------------
-router.get('/:id/unlock',  async (req, res) => { try { await applyOverride(req, res, 'unlock'); } catch (err) { res.status(500).json({ error: err.message }); } });
-router.post('/:id/unlock', async (req, res) => { try { await applyOverride(req, res, 'unlock'); } catch (err) { res.status(500).json({ error: err.message }); } });
+async function handleLock(req, res) {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const rows = await query(
+      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+
+    await ssDoorCommand('LockDoor', id);
+
+    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'lock', mode: 'locked' });
+  } catch (err) {
+    console.error('POST /doors/lock error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+router.get('/:id/lock',  handleLock);
+router.post('/:id/lock', handleLock);
 
 // ---------------------------------------------------------------------------
-// GET|POST /api/v1/doors/:id/lock
-// Query/body: seconds=5  (default 5)
-// ---------------------------------------------------------------------------
-router.get('/:id/lock',  async (req, res) => { try { await applyOverride(req, res, 'lock'); } catch (err) { res.status(500).json({ error: err.message }); } });
-router.post('/:id/lock', async (req, res) => { try { await applyOverride(req, res, 'lock'); } catch (err) { res.status(500).json({ error: err.message }); } });
-
-// ---------------------------------------------------------------------------
-// GET|POST /api/v1/doors/:id/normal — cancel override, restore normal mode immediately
+// POST /api/v1/doors/:id/normal — restore door to schedule
 // ---------------------------------------------------------------------------
 async function handleNormal(req, res) {
   try {
@@ -159,19 +149,85 @@ async function handleNormal(req, res) {
     if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
 
     const rows = await query(
-      `SELECT PkData AS id, Description1 AS name, OperationMode AS mode FROM Door WHERE PkData = ${id}`
+      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
     );
     if (!rows.length) return res.status(404).json({ error: 'Door not found' });
 
-    cancelOverride(String(id));
-    await execute(`UPDATE Door SET OperationMode = ${MODE.normal} WHERE PkData = ${id}`);
+    await ssDoorCommand('DoorBackToSchedule', id);
 
-    res.json({ ok: true, doorId: id, doorName: rows[0].name, mode: 'normal' });
+    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'normal', mode: 'normal' });
   } catch (err) {
+    console.error('POST /doors/normal error:', err.message);
     res.status(500).json({ error: err.message });
   }
 }
 router.get('/:id/normal',  handleNormal);
 router.post('/:id/normal', handleNormal);
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/doors/:id/arm — arm door alarm
+// ---------------------------------------------------------------------------
+router.post('/:id/arm', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const rows = await query(
+      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+
+    await ssDoorCommand('ArmDoor', id, { forceSend: '0' });
+
+    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'arm' });
+  } catch (err) {
+    console.error('POST /doors/arm error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/doors/:id/disarm — disarm door alarm
+// ---------------------------------------------------------------------------
+router.post('/:id/disarm', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const rows = await query(
+      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+
+    await ssDoorCommand('DisarmDoor', id, { forceSend: '0' });
+
+    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'disarm' });
+  } catch (err) {
+    console.error('POST /doors/disarm error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/doors/:id/one-time-access — grant single access
+// ---------------------------------------------------------------------------
+router.post('/:id/one-time-access', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const rows = await query(
+      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+
+    await ssDoorCommand('OneTimeAccess', id);
+
+    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'one-time-access' });
+  } catch (err) {
+    console.error('POST /doors/one-time-access error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;

@@ -102,9 +102,11 @@ function ssRequest(method, urlPath, opts = {}) {
       path: url.pathname + url.search,
       headers: {},
     };
-    if (opts.body) {
+    if (opts.body !== undefined) {
       reqOpts.headers['Content-Type'] = opts.contentType || 'application/xml';
       reqOpts.headers['Content-Length'] = Buffer.byteLength(opts.body);
+    } else if (method === 'PUT' || method === 'POST') {
+      reqOpts.headers['Content-Length'] = 0;
     }
 
     const req = http.request(reqOpts, (res) => {

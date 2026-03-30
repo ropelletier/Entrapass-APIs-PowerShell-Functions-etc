@@ -14,9 +14,10 @@
  *  10. Disk space on data drive
  *
  * Auto-fix (restarts service if stopped):
+ *   - EpCeServiceServer (EntraPass Server)
+ *   - EpCeServiceSmartlink (SmartLink)
+ *   - EpCeServiceGateway (Gateway)
  *   - Kantech.SmartService
- *   - EpCeServiceGateway
- *   - EpCeServiceSmartlink
  *   - KantechEventMonitor
  *
  * Log pruning (runs daily at ~02:00, configurable):

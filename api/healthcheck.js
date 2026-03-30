@@ -69,9 +69,10 @@ const PRUNE_HOUR             = parseInt(process.env.HEALTH_PRUNE_HOUR || '2', 10
 
 // Services eligible for auto-restart
 const RESTARTABLE_SERVICES = {
-  smartservice_svc: 'Kantech.SmartService',
-  gateway_svc:      'EpCeServiceGateway',
+  server_svc:       'EpCeServiceServer',
   smartlink_svc:    'EpCeServiceSmartlink',
+  gateway_svc:      'EpCeServiceGateway',
+  smartservice_svc: 'Kantech.SmartService',
   eventmonitor_svc: 'KantechEventMonitor',
 };
 

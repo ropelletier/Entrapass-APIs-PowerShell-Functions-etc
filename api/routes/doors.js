@@ -1,7 +1,14 @@
 /**
  * routes/doors.js — Door control
  *
- * GET  /api/v1/doors                  list all doors with current mode
+ * Only returns doors that SmartService can actually control. Doors that
+ * exist in the ADS database but are not recognized by SmartService (e.g.
+ * disconnected controllers) are excluded from all endpoints.
+ *
+ * The valid door set is discovered at startup by probing SmartService and
+ * refreshed every 10 minutes in the background.
+ *
+ * GET  /api/v1/doors                  list all controllable doors
  * GET  /api/v1/doors/:id              single door
  * POST /api/v1/doors/:id/unlock       momentary unlock for N seconds (default 5)
  * POST /api/v1/doors/:id/lock         lock (secured) until /normal
@@ -9,10 +16,6 @@
  * POST /api/v1/doors/:id/arm          arm door alarm
  * POST /api/v1/doors/:id/disarm       disarm door alarm
  * POST /api/v1/doors/:id/one-time-access  grant single access
- *
- * Control operations go through SmartService so the command reaches the
- * door controller directly (no ADS polling delay) and generates proper
- * EntraPass audit events.
  */
 
 'use strict';
@@ -23,19 +26,85 @@ const ss = require('../smartservice');
 
 const MODE_LABEL = { 0: 'normal', 1: 'locked', 2: 'unlocked' };
 
+// ---------------------------------------------------------------------------
+// Valid door cache — only doors SmartService recognizes
+// ---------------------------------------------------------------------------
+let validDoorIds = null;               // Set of integer IDs, or null if not yet loaded
+let validDoorsLoading = null;          // Promise while refresh is in progress
+const REFRESH_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Probe SmartService to discover which ADS doors it can actually control.
+ * Uses the lightweight DoorBackToSchedule with a known-bad id pattern to
+ * check for COMPONENT_NOT_EXIST vs OK/other errors.
+ */
+async function refreshValidDoors() {
+  try {
+    const rows = await query('SELECT PkData AS id FROM Door');
+    const key = await ss.getSessionKey();
+    const valid = new Set();
+
+    // Probe each door — SmartService returns 200 with StandardFault for unknown doors
+    const probes = rows.map(async (row) => {
+      const id = parseInt(row.id, 10);
+      try {
+        const res = await ss.ssCall('GET', `Doors/${id}`, { query: {} });
+        // If body contains COMPONENT_NOT_EXIST, the door isn't in SmartService
+        if (res.body && res.body.includes('COMPONENT_NOT_EXIST')) return;
+        // If we get a fault for other reasons, still exclude
+        if (res.body && res.body.includes('StandardFault')) return;
+        valid.add(id);
+      } catch (_) {
+        // Network error etc — assume valid to avoid hiding doors during transient failures
+        valid.add(id);
+      }
+    });
+
+    await Promise.all(probes);
+    validDoorIds = valid;
+    console.log(`[doors] Refreshed valid doors: ${valid.size}/${rows.length} controllable`);
+  } catch (err) {
+    console.error(`[doors] Failed to refresh valid doors: ${err.message}`);
+    // Keep existing cache on failure
+  }
+}
+
+/**
+ * Ensure valid doors are loaded. Returns immediately if cached.
+ */
+async function ensureValidDoors() {
+  if (validDoorIds) return;
+  if (!validDoorsLoading) {
+    validDoorsLoading = refreshValidDoors().finally(() => { validDoorsLoading = null; });
+  }
+  await validDoorsLoading;
+}
+
+// Refresh on a timer
+setInterval(() => refreshValidDoors().catch(() => {}), REFRESH_INTERVAL);
+// Initial load (deferred to not block startup)
+setTimeout(() => refreshValidDoors().catch(() => {}), 5000);
+
+function isDoorValid(id) {
+  // If cache not ready yet, allow all (fail-open)
+  if (!validDoorIds) return true;
+  return validDoorIds.has(id);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function formatDoor(r) {
   const modeCode = parseInt(r.mode, 10);
   return {
-    id:       r.id,
+    id:       parseInt(r.id, 10),
     name:     r.name,
     mode:     MODE_LABEL[modeCode] || String(modeCode),
     modeCode,
   };
 }
 
-// ---------------------------------------------------------------------------
-// SmartService door command helper
-// ---------------------------------------------------------------------------
 async function ssDoorCommand(endpoint, doorId, extraParams = {}) {
   const params = { id: String(doorId), ...extraParams };
   const res = await ss.ssCall('PUT', endpoint, { query: params, body: '', contentType: 'application/xml' });
@@ -60,15 +129,39 @@ async function ssDoorCommand(endpoint, doorId, extraParams = {}) {
   return result;
 }
 
+/**
+ * Lookup a door by ID, checking it exists in both ADS and SmartService.
+ * Returns the row or sends an error response and returns null.
+ */
+async function lookupDoor(id, res) {
+  if (isNaN(id)) { res.status(400).json({ error: 'id must be a number' }); return null; }
+
+  await ensureValidDoors();
+  if (!isDoorValid(id)) {
+    res.status(404).json({ error: 'Door not found or not controllable via SmartService' });
+    return null;
+  }
+
+  const rows = await query(
+    `SELECT PkData AS id, Description1 AS name, OperationMode AS mode FROM Door WHERE PkData = ${id}`
+  );
+  if (!rows.length) { res.status(404).json({ error: 'Door not found' }); return null; }
+  return rows[0];
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/v1/doors
 // ---------------------------------------------------------------------------
 router.get('/', async (req, res) => {
   try {
+    await ensureValidDoors();
     const rows = await query(
       'SELECT PkData AS id, Description1 AS name, OperationMode AS mode FROM Door ORDER BY Description1'
     );
-    res.json({ count: rows.length, doors: rows.map(formatDoor) });
+    const doors = rows
+      .filter(r => isDoorValid(parseInt(r.id, 10)))
+      .map(formatDoor);
+    res.json({ count: doors.length, doors });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -79,13 +172,9 @@ router.get('/', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/:id', async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name, OperationMode AS mode FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
-    res.json(formatDoor(rows[0]));
+    const row = await lookupDoor(parseInt(req.params.id, 10), res);
+    if (!row) return;
+    res.json(formatDoor(row));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -93,26 +182,20 @@ router.get('/:id', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/doors/:id/unlock — momentary unlock for N seconds
-// Body: { "seconds": 5 }  (default 5, max 3600)
-// Uses SmartService TemporarilyUnlockDoor — the controller handles the revert.
 // ---------------------------------------------------------------------------
 async function handleUnlock(req, res) {
   try {
     const id      = parseInt(req.params.id, 10);
     const seconds = Math.max(1, Math.min(3600, parseInt((req.body && req.body.seconds) || req.query.seconds || 5, 10)));
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const row = await lookupDoor(id, res);
+    if (!row) return;
 
     await ssDoorCommand('TemporarilyUnlockDoor', id, { delay: String(seconds) });
 
     res.json({
       ok:       true,
       doorId:   id,
-      doorName: rows[0].name,
+      doorName: row.name,
       action:   'unlock',
       seconds,
       revertsAt: new Date(Date.now() + seconds * 1000).toISOString(),
@@ -131,16 +214,12 @@ router.post('/:id/unlock', handleUnlock);
 async function handleLock(req, res) {
   try {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const row = await lookupDoor(id, res);
+    if (!row) return;
 
     await ssDoorCommand('LockDoor', id);
 
-    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'lock', mode: 'locked' });
+    res.json({ ok: true, doorId: id, doorName: row.name, action: 'lock', mode: 'locked' });
   } catch (err) {
     console.error('POST /doors/lock error:', err.message);
     res.status(500).json({ error: err.message });
@@ -155,16 +234,12 @@ router.post('/:id/lock', handleLock);
 async function handleNormal(req, res) {
   try {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const row = await lookupDoor(id, res);
+    if (!row) return;
 
     await ssDoorCommand('DoorBackToSchedule', id);
 
-    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'normal', mode: 'normal' });
+    res.json({ ok: true, doorId: id, doorName: row.name, action: 'normal', mode: 'normal' });
   } catch (err) {
     console.error('POST /doors/normal error:', err.message);
     res.status(500).json({ error: err.message });
@@ -179,16 +254,12 @@ router.post('/:id/normal', handleNormal);
 router.post('/:id/arm', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const row = await lookupDoor(id, res);
+    if (!row) return;
 
     await ssDoorCommand('ArmDoor', id, { forceSend: '0' });
 
-    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'arm' });
+    res.json({ ok: true, doorId: id, doorName: row.name, action: 'arm' });
   } catch (err) {
     console.error('POST /doors/arm error:', err.message);
     res.status(500).json({ error: err.message });
@@ -201,16 +272,12 @@ router.post('/:id/arm', async (req, res) => {
 router.post('/:id/disarm', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const row = await lookupDoor(id, res);
+    if (!row) return;
 
     await ssDoorCommand('DisarmDoor', id, { forceSend: '0' });
 
-    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'disarm' });
+    res.json({ ok: true, doorId: id, doorName: row.name, action: 'disarm' });
   } catch (err) {
     console.error('POST /doors/disarm error:', err.message);
     res.status(500).json({ error: err.message });
@@ -223,16 +290,12 @@ router.post('/:id/disarm', async (req, res) => {
 router.post('/:id/one-time-access', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const rows = await query(
-      `SELECT PkData AS id, Description1 AS name FROM Door WHERE PkData = ${id}`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Door not found' });
+    const row = await lookupDoor(id, res);
+    if (!row) return;
 
     await ssDoorCommand('OneTimeAccess', id);
 
-    res.json({ ok: true, doorId: id, doorName: rows[0].name, action: 'one-time-access' });
+    res.json({ ok: true, doorId: id, doorName: row.name, action: 'one-time-access' });
   } catch (err) {
     console.error('POST /doors/one-time-access error:', err.message);
     res.status(500).json({ error: err.message });

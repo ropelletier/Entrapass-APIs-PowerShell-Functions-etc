@@ -227,7 +227,9 @@ function checkDiskSpace() {
         resolve({ name: 'disk_space', ok: false, detail: `Could not check disk: ${err.message}` });
         return;
       }
-      const match = stdout.match(/FreeSpace=(\d+)/);
+      // wmic on Windows can output UTF-16 with null bytes — strip them
+      const cleaned = stdout.replace(/\0/g, '').replace(/[^\x20-\x7E\r\n]/g, '');
+      const match = cleaned.match(/FreeSpace\s*=\s*(\d+)/);
       if (!match) {
         resolve({ name: 'disk_space', ok: false, detail: 'Could not parse free space' });
         return;

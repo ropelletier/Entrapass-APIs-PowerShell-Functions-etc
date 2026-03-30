@@ -243,6 +243,9 @@ async function runHealthCheck(autoFix = true) {
         `Time: ${new Date().toISOString()}\n` +
         `Host: ${require('os').hostname()}`
       );
+      // Reset failure alert counter so next outage gets fresh alerts
+      state.alertCount[check.name] = 0;
+      state.lastAlert[check.name] = 0;
     }
 
     state.prevStatus[check.name] = check.ok;

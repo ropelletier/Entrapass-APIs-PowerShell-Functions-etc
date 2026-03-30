@@ -1,20 +1,27 @@
 /**
- * healthcheck.js — Deep health check with auto-remediation and email alerts
+ * healthcheck.js — Deep health check with auto-remediation, log pruning, and email alerts
  *
  * Checks:
  *   1. ADS database queryable
  *   2. SmartService Windows service running
  *   3. SmartService HTTP port accepting connections
- *   4. SmartService login (actual auth, not just TCP)
+ *   4. SmartService login (actual auth via RPC)
  *   5. EntraPass Gateway service running
- *   6. KantechEventMonitor service running
- *   7. MySQL remote database reachable
- *   8. Disk space on data drive
+ *   6. EntraPass SmartLink service running
+ *   7. KantechEventMonitor service running
+ *   8. MySQL remote database reachable
+ *   9. Disk space on data drive
  *
  * Auto-fix (restarts service if stopped):
  *   - Kantech.SmartService
  *   - EpCeServiceGateway
+ *   - EpCeServiceSmartlink
  *   - KantechEventMonitor
+ *
+ * Log pruning (runs daily at ~02:00, configurable):
+ *   - api-audit.log: rotated when > 50 MB, keeps 5 rotations
+ *   - *.pml files in logs/: deleted after 7 days
+ *   - SmartService logs: deleted after 30 days
  *
  * Notifications:
  *   - Sends up to 3 failure emails per outage (with cooldown)
@@ -31,6 +38,8 @@
 'use strict';
 
 const { exec }     = require('child_process');
+const fs           = require('fs');
+const path         = require('path');
 const net          = require('net');
 const os           = require('os');
 const nodemailer   = require('nodemailer');
@@ -48,10 +57,21 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '25', 10);
 const SMTP_FROM = process.env.SMTP_FROM;
 const SMTP_TO   = process.env.SMTP_TO;
 
+const LOG_DIR   = process.env.LOG_DIR || path.resolve(__dirname, '..', 'logs');
+const SS_LOG_DIR = path.resolve('C:\\Program Files (x86)\\Kantech\\SmartService\\logs');
+
+// Log pruning config
+const AUDIT_LOG_MAX_MB       = 50;
+const AUDIT_LOG_KEEP_ROTATED = 5;
+const PML_MAX_AGE_DAYS       = 7;
+const SS_LOG_MAX_AGE_DAYS    = 30;
+const PRUNE_HOUR             = parseInt(process.env.HEALTH_PRUNE_HOUR || '2', 10); // 2 AM
+
 // Services eligible for auto-restart
 const RESTARTABLE_SERVICES = {
   smartservice_svc: 'Kantech.SmartService',
   gateway_svc:      'EpCeServiceGateway',
+  smartlink_svc:    'EpCeServiceSmartlink',
   eventmonitor_svc: 'KantechEventMonitor',
 };
 
@@ -64,6 +84,7 @@ const state = {
   alertCount: {},   // failure alerts sent per check (resets on recovery)
   lastAlert:  {},   // last alert timestamp per check (for cooldown)
   prevStatus: {},   // previous ok/fail per check (for recovery detection)
+  lastPrune:  null, // date string of last prune run (YYYY-MM-DD)
 };
 
 // ---------------------------------------------------------------------------
@@ -184,6 +205,11 @@ function checkGatewaySvc() {
   return checkWindowsService('gateway_svc', 'EpCeServiceGateway');
 }
 
+/** EntraPass SmartLink service */
+function checkSmartLinkSvc() {
+  return checkWindowsService('smartlink_svc', 'EpCeServiceSmartlink');
+}
+
 /** KantechEventMonitor service */
 function checkEventMonitorSvc() {
   return checkWindowsService('eventmonitor_svc', 'KantechEventMonitor');
@@ -217,7 +243,6 @@ async function checkMysql() {
 
 /** Disk space on the data drive */
 function checkDiskSpace() {
-  // Extract drive letter from KANTECH_DATA_DIR (e.g. "C:\...")
   const dataDir = process.env.KANTECH_DATA_DIR || 'C:\\';
   const drive = dataDir.charAt(0).toUpperCase();
 
@@ -267,6 +292,111 @@ function startService(svcName) {
 }
 
 // ---------------------------------------------------------------------------
+// Log pruning
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete files matching a pattern older than maxAgeDays.
+ * Returns array of deleted file names.
+ */
+function deleteOldFiles(dir, pattern, maxAgeDays) {
+  const deleted = [];
+  if (!fs.existsSync(dir)) return deleted;
+
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  try {
+    for (const file of fs.readdirSync(dir)) {
+      if (!pattern.test(file)) continue;
+      const fp = path.join(dir, file);
+      try {
+        const stat = fs.statSync(fp);
+        if (stat.mtimeMs < cutoff) {
+          fs.unlinkSync(fp);
+          deleted.push(file);
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return deleted;
+}
+
+/**
+ * Rotate api-audit.log if it exceeds the size limit.
+ * Keeps up to AUDIT_LOG_KEEP_ROTATED old copies.
+ */
+function rotateAuditLog() {
+  const logFile = path.join(LOG_DIR, 'api-audit.log');
+  try {
+    if (!fs.existsSync(logFile)) return null;
+    const stat = fs.statSync(logFile);
+    const sizeMB = stat.size / (1024 * 1024);
+    if (sizeMB < AUDIT_LOG_MAX_MB) return null;
+
+    // Shift existing rotated files: .5 -> delete, .4 -> .5, ... .1 -> .2
+    for (let i = AUDIT_LOG_KEEP_ROTATED; i >= 1; i--) {
+      const src = `${logFile}.${i}`;
+      const dst = `${logFile}.${i + 1}`;
+      if (i === AUDIT_LOG_KEEP_ROTATED) {
+        try { fs.unlinkSync(src); } catch (_) {}
+      } else if (fs.existsSync(src)) {
+        fs.renameSync(src, dst);
+      }
+    }
+    // Current -> .1
+    fs.renameSync(logFile, `${logFile}.1`);
+    return `Rotated api-audit.log (${sizeMB.toFixed(1)} MB)`;
+  } catch (err) {
+    return `Rotation failed: ${err.message}`;
+  }
+}
+
+/**
+ * Run all log pruning tasks. Called once per day.
+ * Returns summary of actions taken.
+ */
+function pruneLogs() {
+  const actions = [];
+
+  // 1. Rotate api-audit.log
+  const rotateResult = rotateAuditLog();
+  if (rotateResult) actions.push(rotateResult);
+
+  // 2. Delete old .pml files
+  const pmlDeleted = deleteOldFiles(LOG_DIR, /\.pml$/i, PML_MAX_AGE_DAYS);
+  if (pmlDeleted.length) actions.push(`Deleted ${pmlDeleted.length} .pml file(s) older than ${PML_MAX_AGE_DAYS} days`);
+
+  // 3. Delete old .jsonl watch/backup files
+  const jsonlDeleted = deleteOldFiles(LOG_DIR, /\.(jsonl)$/i, PML_MAX_AGE_DAYS);
+  if (jsonlDeleted.length) actions.push(`Deleted ${jsonlDeleted.length} .jsonl file(s) older than ${PML_MAX_AGE_DAYS} days`);
+
+  // 4. Delete old SmartService logs
+  const ssDeleted = deleteOldFiles(SS_LOG_DIR, /\.log$/i, SS_LOG_MAX_AGE_DAYS);
+  if (ssDeleted.length) actions.push(`Deleted ${ssDeleted.length} SmartService log(s) older than ${SS_LOG_MAX_AGE_DAYS} days`);
+
+  // 5. Delete old rotated audit logs beyond retention
+  const rotatedDeleted = deleteOldFiles(LOG_DIR, /^api-audit\.log\.\d+$/, 30);
+  if (rotatedDeleted.length) actions.push(`Deleted ${rotatedDeleted.length} old rotated audit log(s)`);
+
+  if (actions.length) {
+    console.log(`[healthcheck] Log pruning: ${actions.join('; ')}`);
+  }
+  return actions;
+}
+
+/**
+ * Check if log pruning should run (once per day around PRUNE_HOUR).
+ */
+function maybePruneLogs() {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10); // YYYY-MM-DD
+  if (state.lastPrune === today) return;
+  if (now.getHours() !== PRUNE_HOUR) return;
+
+  state.lastPrune = today;
+  pruneLogs();
+}
+
+// ---------------------------------------------------------------------------
 // Main health check
 // ---------------------------------------------------------------------------
 
@@ -276,12 +406,16 @@ function startService(svcName) {
  * @returns {object} { ok, time, checks[], remediations[] }
  */
 async function runHealthCheck(autoFix = true) {
+  // Check if log pruning is due
+  maybePruneLogs();
+
   const results = await Promise.all([
     checkDatabase(),
     checkSmartServiceSvc(),
     checkSmartServiceHttp(),
     checkSmartServiceLogin(),
     checkGatewaySvc(),
+    checkSmartLinkSvc(),
     checkEventMonitorSvc(),
     checkMysql(),
     checkDiskSpace(),
@@ -316,7 +450,7 @@ async function runHealthCheck(autoFix = true) {
 
     // Re-check other restarted services
     for (const [checkName, svcName] of Object.entries(RESTARTABLE_SERVICES)) {
-      if (svcName === 'Kantech.SmartService') continue; // already handled above
+      if (svcName === 'Kantech.SmartService') continue;
       const fix = remediations.find(r => r.service === svcName && r.success);
       if (fix) {
         await new Promise(r => setTimeout(r, 3000));
@@ -391,6 +525,7 @@ let _interval = null;
 function startBackgroundChecks() {
   if (_interval) return;
   console.log(`[healthcheck] Background checks every ${CHECK_INTERVAL / 1000}s`);
+  console.log(`[healthcheck] Log pruning scheduled daily at ${PRUNE_HOUR}:00`);
   // Initial check after 10s (let server finish starting)
   setTimeout(() => runHealthCheck(true).catch(() => {}), 10000);
   _interval = setInterval(() => runHealthCheck(true).catch(() => {}), CHECK_INTERVAL);
@@ -400,4 +535,4 @@ function stopBackgroundChecks() {
   if (_interval) { clearInterval(_interval); _interval = null; }
 }
 
-module.exports = { deepHealthRoute, runHealthCheck, startBackgroundChecks, stopBackgroundChecks };
+module.exports = { deepHealthRoute, runHealthCheck, startBackgroundChecks, stopBackgroundChecks, pruneLogs };

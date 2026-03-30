@@ -420,6 +420,7 @@ async function runHealthCheck(autoFix = true) {
     checkSmartServiceSvc(),
     checkSmartServiceHttp(),
     checkSmartServiceLogin(),
+    checkServerSvc(),
     checkGatewaySvc(),
     checkSmartLinkSvc(),
     checkEventMonitorSvc(),

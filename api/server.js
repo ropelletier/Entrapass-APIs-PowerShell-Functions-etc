@@ -22,6 +22,8 @@ const express       = require('express');
 const { requireApiKey } = require('./auth');
 const { requestLogger } = require('./logger');
 
+const { deepHealthRoute, startBackgroundChecks } = require('./healthcheck');
+
 const app  = express();
 const PORT = process.env.API_PORT || 3000;
 
@@ -34,6 +36,7 @@ app.use(requestLogger);
 app.get('/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString(), service: 'kantech-api' });
 });
+app.get('/health/deep', deepHealthRoute);
 
 // ---------------------------------------------------------------------------
 // Protected routes

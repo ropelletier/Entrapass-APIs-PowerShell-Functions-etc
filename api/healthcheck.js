@@ -2,15 +2,22 @@
  * healthcheck.js — Deep health check with auto-remediation and email alerts
  *
  * Checks:
- *   1. API server reachable (self-check via /health)
- *   2. ADS database queryable
- *   3. SmartService Windows service running + HTTP responsive
+ *   1. ADS database queryable
+ *   2. SmartService Windows service running
+ *   3. SmartService HTTP port accepting connections
+ *   4. SmartService login (actual auth, not just TCP)
+ *   5. EntraPass Gateway service running
+ *   6. KantechEventMonitor service running
+ *   7. MySQL remote database reachable
+ *   8. Disk space on data drive
  *
- * Auto-fix:
- *   - Restarts Kantech.SmartService if stopped or unresponsive
+ * Auto-fix (restarts service if stopped):
+ *   - Kantech.SmartService
+ *   - EpCeServiceGateway
+ *   - KantechEventMonitor
  *
  * Notifications:
- *   - Sends email via SMTP on failure (with cooldown to avoid spam)
+ *   - Sends up to 3 failure emails per outage (with cooldown)
  *   - Sends recovery email when a previously-failed check passes
  *
  * Usage:
@@ -23,23 +30,30 @@
 
 'use strict';
 
-const { execFile, exec } = require('child_process');
-const http               = require('http');
-const net                = require('net');
-const nodemailer         = require('nodemailer');
+const { exec }     = require('child_process');
+const net          = require('net');
+const os           = require('os');
+const nodemailer   = require('nodemailer');
 
 // ---------------------------------------------------------------------------
 // Config from environment
 // ---------------------------------------------------------------------------
 const SMARTSERVICE_PORT = parseInt(process.env.SMARTSERVICE_PORT || '8801', 10);
-const SMARTSERVICE_SVC  = 'Kantech.SmartService';
 const CHECK_INTERVAL    = parseInt(process.env.HEALTH_CHECK_INTERVAL || '60', 10) * 1000;
-const ALERT_COOLDOWN    = parseInt(process.env.HEALTH_ALERT_COOLDOWN || '300', 10) * 1000; // 5 min default
+const ALERT_COOLDOWN    = parseInt(process.env.HEALTH_ALERT_COOLDOWN || '300', 10) * 1000;
+const DISK_WARN_GB      = parseInt(process.env.HEALTH_DISK_WARN_GB || '5', 10);
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '25', 10);
 const SMTP_FROM = process.env.SMTP_FROM;
 const SMTP_TO   = process.env.SMTP_TO;
+
+// Services eligible for auto-restart
+const RESTARTABLE_SERVICES = {
+  smartservice_svc: 'Kantech.SmartService',
+  gateway_svc:      'EpCeServiceGateway',
+  eventmonitor_svc: 'KantechEventMonitor',
+};
 
 // ---------------------------------------------------------------------------
 // State tracking
@@ -47,12 +61,9 @@ const SMTP_TO   = process.env.SMTP_TO;
 const MAX_FAILURE_ALERTS = 3;
 
 const state = {
-  // Number of failure alerts sent per check name (resets on recovery)
-  alertCount: {},
-  // Last alert time per check name — for cooldown
-  lastAlert: {},
-  // Previous status per check — for recovery detection
-  prevStatus: {},
+  alertCount: {},   // failure alerts sent per check (resets on recovery)
+  lastAlert:  {},   // last alert timestamp per check (for cooldown)
+  prevStatus: {},   // previous ok/fail per check (for recovery detection)
 };
 
 // ---------------------------------------------------------------------------
@@ -101,12 +112,25 @@ function markAlerted(checkName) {
 }
 
 // ---------------------------------------------------------------------------
+// Generic Windows service check
+// ---------------------------------------------------------------------------
+function checkWindowsService(name, svcName) {
+  return new Promise((resolve) => {
+    exec(`sc query "${svcName}"`, (err, stdout) => {
+      if (err || !stdout.includes('RUNNING')) {
+        resolve({ name, ok: false, detail: `Windows service "${svcName}" is not running` });
+      } else {
+        resolve({ name, ok: true, detail: 'Service is running' });
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Individual checks
 // ---------------------------------------------------------------------------
 
-/**
- * Check if ADS database is queryable.
- */
+/** ADS database queryable */
 async function checkDatabase() {
   const { query } = require('./db');
   try {
@@ -117,24 +141,12 @@ async function checkDatabase() {
   }
 }
 
-/**
- * Check if SmartService Windows service is running.
- */
+/** SmartService Windows service */
 function checkSmartServiceSvc() {
-  return new Promise((resolve) => {
-    exec(`sc query "${SMARTSERVICE_SVC}"`, (err, stdout) => {
-      if (err || !stdout.includes('RUNNING')) {
-        resolve({ name: 'smartservice_svc', ok: false, detail: `Windows service "${SMARTSERVICE_SVC}" is not running` });
-      } else {
-        resolve({ name: 'smartservice_svc', ok: true, detail: 'Service is running' });
-      }
-    });
-  });
+  return checkWindowsService('smartservice_svc', 'Kantech.SmartService');
 }
 
-/**
- * Check if SmartService HTTP port is accepting connections.
- */
+/** SmartService TCP port */
 function checkSmartServiceHttp() {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -156,23 +168,97 @@ function checkSmartServiceHttp() {
   });
 }
 
+/** SmartService login — actually authenticate and get a session key */
+async function checkSmartServiceLogin() {
+  try {
+    const ss = require('./smartservice');
+    const key = await ss.refreshSession();
+    return { name: 'smartservice_login', ok: true, detail: `Session key obtained (${key.substring(0, 8)}...)` };
+  } catch (err) {
+    return { name: 'smartservice_login', ok: false, detail: err.message };
+  }
+}
+
+/** EntraPass Gateway service */
+function checkGatewaySvc() {
+  return checkWindowsService('gateway_svc', 'EpCeServiceGateway');
+}
+
+/** KantechEventMonitor service */
+function checkEventMonitorSvc() {
+  return checkWindowsService('eventmonitor_svc', 'KantechEventMonitor');
+}
+
+/** MySQL remote database connectivity */
+async function checkMysql() {
+  const host = process.env.MYSQL_HOST;
+  const port = parseInt(process.env.MYSQL_PORT || '3306', 10);
+  const db   = process.env.MYSQL_DATABASE;
+  const user = process.env.MYSQL_USER;
+  const pass = process.env.MYSQL_PASSWORD;
+
+  if (!host) return { name: 'mysql', ok: true, detail: 'Skipped (MYSQL_HOST not configured)' };
+
+  let connection;
+  try {
+    const mysql = require('mysql2/promise');
+    connection = await mysql.createConnection({
+      host, port, database: db, user, password: pass,
+      connectTimeout: 5000,
+    });
+    await connection.execute('SELECT 1');
+    return { name: 'mysql', ok: true, detail: `MySQL reachable at ${host}:${port}` };
+  } catch (err) {
+    return { name: 'mysql', ok: false, detail: `MySQL ${host}:${port}: ${err.message}` };
+  } finally {
+    if (connection) try { await connection.end(); } catch (_) {}
+  }
+}
+
+/** Disk space on the data drive */
+function checkDiskSpace() {
+  // Extract drive letter from KANTECH_DATA_DIR (e.g. "C:\...")
+  const dataDir = process.env.KANTECH_DATA_DIR || 'C:\\';
+  const drive = dataDir.charAt(0).toUpperCase();
+
+  return new Promise((resolve) => {
+    exec(`wmic logicaldisk where "DeviceID='${drive}:'" get FreeSpace /format:value`, { timeout: 10000 }, (err, stdout) => {
+      if (err) {
+        resolve({ name: 'disk_space', ok: false, detail: `Could not check disk: ${err.message}` });
+        return;
+      }
+      const match = stdout.match(/FreeSpace=(\d+)/);
+      if (!match) {
+        resolve({ name: 'disk_space', ok: false, detail: 'Could not parse free space' });
+        return;
+      }
+      const freeGB = parseInt(match[1], 10) / (1024 * 1024 * 1024);
+      const ok = freeGB >= DISK_WARN_GB;
+      resolve({
+        name: 'disk_space',
+        ok,
+        detail: `${drive}: drive — ${freeGB.toFixed(1)} GB free${ok ? '' : ` (below ${DISK_WARN_GB} GB threshold)`}`,
+      });
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Auto-remediation
 // ---------------------------------------------------------------------------
 
 /**
- * Attempt to start the SmartService Windows service.
- * Returns { attempted, success, detail }.
+ * Attempt to start a Windows service by name.
  */
-function restartSmartService() {
+function startService(svcName) {
   return new Promise((resolve) => {
-    console.log(`[healthcheck] Attempting to start ${SMARTSERVICE_SVC}...`);
-    exec(`net start "${SMARTSERVICE_SVC}"`, { timeout: 30000 }, (err, stdout, stderr) => {
+    console.log(`[healthcheck] Attempting to start ${svcName}...`);
+    exec(`net start "${svcName}"`, { timeout: 30000 }, (err, stdout, stderr) => {
       if (err) {
-        resolve({ attempted: true, success: false, detail: stderr || stdout || err.message });
+        resolve({ service: svcName, attempted: true, success: false, detail: stderr || stdout || err.message });
       } else {
-        console.log(`[healthcheck] ${SMARTSERVICE_SVC} started successfully`);
-        resolve({ attempted: true, success: true, detail: 'Service started' });
+        console.log(`[healthcheck] ${svcName} started successfully`);
+        resolve({ service: svcName, attempted: true, success: true, detail: 'Service started' });
       }
     });
   });
@@ -192,25 +278,48 @@ async function runHealthCheck(autoFix = true) {
     checkDatabase(),
     checkSmartServiceSvc(),
     checkSmartServiceHttp(),
+    checkSmartServiceLogin(),
+    checkGatewaySvc(),
+    checkEventMonitorSvc(),
+    checkMysql(),
+    checkDiskSpace(),
   ]);
 
   const remediations = [];
-  const allOk = results.every(r => r.ok);
 
-  // Auto-fix SmartService if needed
-  const svcCheck  = results.find(r => r.name === 'smartservice_svc');
-  const httpCheck = results.find(r => r.name === 'smartservice_http');
+  // Auto-fix any restartable services that are down
+  if (autoFix) {
+    for (const [checkName, svcName] of Object.entries(RESTARTABLE_SERVICES)) {
+      const check = results.find(r => r.name === checkName);
+      if (check && !check.ok) {
+        const fix = await startService(svcName);
+        remediations.push(fix);
+      }
+    }
 
-  if (autoFix && (!svcCheck.ok || !httpCheck.ok)) {
-    const fix = await restartSmartService();
-    remediations.push({ service: SMARTSERVICE_SVC, ...fix });
-
-    if (fix.success) {
-      // Wait a moment then re-check
+    // If SmartService was restarted, also re-check the HTTP and login checks
+    const ssRestart = remediations.find(r => r.service === 'Kantech.SmartService');
+    if (ssRestart && ssRestart.success) {
       await new Promise(r => setTimeout(r, 5000));
-      const recheck = await Promise.all([checkSmartServiceSvc(), checkSmartServiceHttp()]);
-      for (const rc of recheck) {
+      const rechecks = await Promise.all([
+        checkSmartServiceSvc(),
+        checkSmartServiceHttp(),
+        checkSmartServiceLogin(),
+      ]);
+      for (const rc of rechecks) {
         const orig = results.find(r => r.name === rc.name);
+        if (orig) { orig.ok = rc.ok; orig.detail = rc.detail; orig.remediated = true; }
+      }
+    }
+
+    // Re-check other restarted services
+    for (const [checkName, svcName] of Object.entries(RESTARTABLE_SERVICES)) {
+      if (svcName === 'Kantech.SmartService') continue; // already handled above
+      const fix = remediations.find(r => r.service === svcName && r.success);
+      if (fix) {
+        await new Promise(r => setTimeout(r, 3000));
+        const rc = await checkWindowsService(checkName, svcName);
+        const orig = results.find(r => r.name === checkName);
         if (orig) { orig.ok = rc.ok; orig.detail = rc.detail; orig.remediated = true; }
       }
     }
@@ -229,7 +338,7 @@ async function runHealthCheck(autoFix = true) {
         `Check "${check.name}" is failing.\n\n` +
         `Detail: ${check.detail}\n` +
         `Time: ${new Date().toISOString()}\n` +
-        `Host: ${require('os').hostname()}\n` +
+        `Host: ${os.hostname()}\n` +
         fixNote
       );
       markAlerted(check.name);
@@ -241,7 +350,7 @@ async function runHealthCheck(autoFix = true) {
         `Check "${check.name}" has recovered.\n\n` +
         `Detail: ${check.detail}\n` +
         `Time: ${new Date().toISOString()}\n` +
-        `Host: ${require('os').hostname()}`
+        `Host: ${os.hostname()}`
       );
       // Reset failure alert counter so next outage gets fresh alerts
       state.alertCount[check.name] = 0;

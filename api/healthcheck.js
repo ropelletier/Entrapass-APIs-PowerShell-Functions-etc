@@ -44,7 +44,11 @@ const SMTP_TO   = process.env.SMTP_TO;
 // ---------------------------------------------------------------------------
 // State tracking
 // ---------------------------------------------------------------------------
+const MAX_FAILURE_ALERTS = 3;
+
 const state = {
+  // Number of failure alerts sent per check name (resets on recovery)
+  alertCount: {},
   // Last alert time per check name — for cooldown
   lastAlert: {},
   // Previous status per check — for recovery detection

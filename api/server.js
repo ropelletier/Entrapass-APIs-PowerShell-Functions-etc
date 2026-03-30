@@ -68,6 +68,7 @@ app.use((err, req, res, next) => {
 // Start
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {
+  startBackgroundChecks();
   console.log('');
   console.log('Kantech API started');
   console.log(`  Port:    ${PORT}`);

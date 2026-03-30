@@ -6,11 +6,12 @@
  *   2. SmartService Windows service running
  *   3. SmartService HTTP port accepting connections
  *   4. SmartService login (actual auth via RPC)
- *   5. EntraPass Gateway service running
- *   6. EntraPass SmartLink service running
- *   7. KantechEventMonitor service running
- *   8. MySQL remote database reachable
- *   9. Disk space on data drive
+ *   5. EntraPass Server service running (required for SmartLink RPC)
+ *   6. EntraPass Gateway service running
+ *   7. EntraPass SmartLink service running
+ *   8. KantechEventMonitor service running
+ *   9. MySQL remote database reachable
+ *  10. Disk space on data drive
  *
  * Auto-fix (restarts service if stopped):
  *   - Kantech.SmartService

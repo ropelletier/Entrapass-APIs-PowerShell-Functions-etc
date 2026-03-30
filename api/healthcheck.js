@@ -201,6 +201,11 @@ async function checkSmartServiceLogin() {
   }
 }
 
+/** EntraPass Server service — required for SmartLink RPC */
+function checkServerSvc() {
+  return checkWindowsService('server_svc', 'EpCeServiceServer');
+}
+
 /** EntraPass Gateway service */
 function checkGatewaySvc() {
   return checkWindowsService('gateway_svc', 'EpCeServiceGateway');

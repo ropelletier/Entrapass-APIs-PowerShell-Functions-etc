@@ -42,6 +42,15 @@ async function ssDoorCommand(endpoint, doorId, extraParams = {}) {
   if (res.status !== 200) {
     throw new Error(`SmartService ${endpoint} returned ${res.status}: ${res.body}`);
   }
+
+  // Check for StandardFault XML (SmartService returns 200 even on faults)
+  const faultMatch = res.body.match(/<FirstLanguageErrorDescription>([^<]*)<\/FirstLanguageErrorDescription>/);
+  if (faultMatch) {
+    const msgMatch = res.body.match(/<Message>([^<]*)<\/Message>/);
+    const msg = msgMatch ? msgMatch[1].replace(/&#xD;\n/g, ' ') : faultMatch[1];
+    throw new Error(`SmartService ${endpoint}: ${msg}`);
+  }
+
   // Response is <ServiceCommandResult>OK</ServiceCommandResult> or error text
   const match = res.body.match(/<ServiceCommandResult>([^<]*)<\/ServiceCommandResult>/);
   const result = match ? match[1] : res.body;

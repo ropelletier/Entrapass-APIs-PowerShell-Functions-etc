@@ -89,12 +89,15 @@ async function sendAlert(subject, body) {
 }
 
 function shouldAlert(checkName) {
+  const count = state.alertCount[checkName] || 0;
+  if (count >= MAX_FAILURE_ALERTS) return false;
   const last = state.lastAlert[checkName] || 0;
   return (Date.now() - last) >= ALERT_COOLDOWN;
 }
 
 function markAlerted(checkName) {
   state.lastAlert[checkName] = Date.now();
+  state.alertCount[checkName] = (state.alertCount[checkName] || 0) + 1;
 }
 
 // ---------------------------------------------------------------------------

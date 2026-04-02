@@ -5,12 +5,12 @@
  * Changes take effect after restarting the service.
  *
  * Example field-map.json:
- *   { "cardInfo1": "powerschool_id", "cardInfo2": "badge_number" }
+ *   { "cardInfo1": "uuid", "cardInfo2": "badge_number" }
  *
  * With that config:
- *   GET  /users  → response uses "powerschool_id" instead of "cardInfo1"
- *   POST /users  → body accepts "powerschool_id", writes to cardInfo1
- *   PUT  /users/:id → body accepts "powerschool_id", writes to cardInfo1
+ *   GET  /users  → response uses "uuid" instead of "cardInfo1"
+ *   POST /users  → body accepts "uuid", writes to cardInfo1
+ *   PUT  /users/:id → body accepts "uuid", writes to cardInfo1
  */
 
 'use strict';

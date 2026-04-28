@@ -13,7 +13,7 @@
 'use strict';
 
 const router = require('express').Router();
-const { query, esc, escStr } = require('../db');
+const { query, esc } = require('../db');
 
 const ADS_WRITE_ERROR = 'This operation is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please make this change through the EntraPass workstation instead.';
 

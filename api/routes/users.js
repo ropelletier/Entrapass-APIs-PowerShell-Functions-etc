@@ -8,6 +8,8 @@
  * GET  /api/v1/users?access_level=Staff   filter by access level (LIKE)
  * GET  /api/v1/users/:id                  single user by CardholderID
  * GET  /api/v1/users/:id/cards            all cards assigned to a user
+ *
+ * DISABLED (direct ADS writes bypass SmartService and cause sync issues):
  * POST /api/v1/users                      create new cardholder
  * PUT  /api/v1/users/:id                  update cardholder fields
  */

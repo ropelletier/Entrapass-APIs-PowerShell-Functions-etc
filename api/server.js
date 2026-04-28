@@ -112,3 +112,15 @@ app.listen(PORT, () => {
   console.log('  DELETE /api/v1/admin/keys/:id             revoke API key');
   console.log('');
 });
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown — log out SmartService session to free connection slot
+// ---------------------------------------------------------------------------
+async function shutdown(signal) {
+  console.log(`\n${signal} received — logging out SmartService session...`);
+  const { logout } = require('./smartservice');
+  await logout();
+  process.exit(0);
+}
+process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -103,17 +103,17 @@ router.get('/card-types', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/card-types — DISABLED
+// POST /api/v1/card-types — DISABLED (no SmartService endpoint)
 // ---------------------------------------------------------------------------
 router.post('/card-types', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+  res.status(403).json({ error: NO_SS_ENDPOINT });
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/card-types/:id — DISABLED
+// PUT /api/v1/card-types/:id — DISABLED (no SmartService endpoint)
 // ---------------------------------------------------------------------------
 router.put('/card-types/:id', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+  res.status(403).json({ error: NO_SS_ENDPOINT });
 });
 
 module.exports = router;

@@ -159,13 +159,24 @@ async function ssCall(method, urlPath, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Card operations via SmartService
+// Constants
+// ---------------------------------------------------------------------------
+const GATEWAY_SITE_ID      = 67;
+const DEFAULT_CARD_TYPE    = 18;  // Employee
+const ALWAYS_VALID_SCHEDULE = 25;
+
+// ---------------------------------------------------------------------------
+// XML helpers
 // ---------------------------------------------------------------------------
 
+function escapeXml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
 /**
- * Build Card XML for SmartService PUT/POST.
- * @param {number} id           - Card PkData (cardholder ID)
- * @param {object} fields       - { CardNumber1: "8006:12345", DisplayCardNumber1: "True", ... }
+ * Build Card XML with flat key-value fields only.
+ * Used by card-slot operations (CardNumber1, CardState1, etc.)
  */
 function buildCardXml(id, fields) {
   let xml = '<?xml version="1.0" encoding="utf-8"?><Card>';
@@ -177,10 +188,133 @@ function buildCardXml(id, fields) {
   return xml;
 }
 
-function escapeXml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+/**
+ * Build Card XML with flat fields AND raw XML fragments (for nested structures).
+ * @param {number} id            - Card PkData
+ * @param {object} fields        - Flat key-value fields
+ * @param {string[]} fragments   - Pre-built XML fragments (CardAccessLevels, CardDoorAccessList)
+ */
+function buildCardXmlFull(id, fields, fragments = []) {
+  let xml = '<?xml version="1.0" encoding="utf-8"?><Card>';
+  xml += `<ID>${id}</ID>`;
+  for (const [key, value] of Object.entries(fields)) {
+    xml += `<${key}>${escapeXml(String(value))}</${key}>`;
+  }
+  for (const frag of fragments) {
+    xml += frag;
+  }
+  xml += '</Card>';
+  return xml;
 }
+
+/**
+ * Build <CardAccessLevels> XML fragment for a single primary access level.
+ * @param {number} accessLevelId  - Access level PkData (0 or null to clear)
+ * @returns {string} XML fragment
+ */
+function buildAccessLevelsFragment(accessLevelId) {
+  if (!accessLevelId) return '<CardAccessLevels/>';
+  return '<CardAccessLevels><CardAccessLevel>' +
+    `<GatewaySiteID>${GATEWAY_SITE_ID}</GatewaySiteID>` +
+    `<AccessLevelID>${accessLevelId}</AccessLevelID>` +
+    '<CardSecondaryAccessLevels/>' +
+    '</CardAccessLevel></CardAccessLevels>';
+}
+
+/**
+ * Build <CardDoorAccessList> XML fragment from an array of door exceptions.
+ * @param {Array<{doorId: number, scheduleId: number, prevent: boolean}>} exceptions
+ * @returns {string} XML fragment
+ */
+function buildDoorAccessFragment(exceptions) {
+  if (!exceptions || !exceptions.length) return '<CardDoorAccessList/>';
+  let xml = '<CardDoorAccessList>';
+  for (const ex of exceptions) {
+    xml += '<CardDoorAccess>' +
+      `<DoorID>${ex.doorId}</DoorID>` +
+      `<ScheduleID>${ex.scheduleId || ALWAYS_VALID_SCHEDULE}</ScheduleID>` +
+      `<Prevent>${ex.prevent ? 'True' : 'False'}</Prevent>` +
+      `<SiteID>${GATEWAY_SITE_ID}</SiteID>` +
+      '</CardDoorAccess>';
+  }
+  xml += '</CardDoorAccessList>';
+  return xml;
+}
+
+/**
+ * Build AccessLevel XML for SmartService POST/PUT AccessLevels/{id}.
+ */
+function buildAccessLevelXml(id, name, description, allValid = false) {
+  return '<?xml version="1.0" encoding="utf-8"?><AccessLevel>' +
+    `<GatewaySiteID>${GATEWAY_SITE_ID}</GatewaySiteID>` +
+    `<AllValid>${allValid ? 'True' : 'False'}</AllValid>` +
+    `<PrimaryName>${escapeXml(name)}</PrimaryName>` +
+    `<SecondaryName>${escapeXml(description || name)}</SecondaryName>` +
+    '<AccessLevelItems/>' +
+    `<ID>${id}</ID>` +
+    '</AccessLevel>';
+}
+
+// ---------------------------------------------------------------------------
+// XML parsers — extract structured data from GET Cards response
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the primary access level ID from Card XML.
+ * @returns {number|null} Access level ID or null if none
+ */
+function parseCardAccessLevel(xml) {
+  const m = xml.match(/<CardAccessLevels>[\s\S]*?<AccessLevelID>(\d+)<\/AccessLevelID>/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Parse door exceptions from Card XML.
+ * @returns {Array<{doorId: number, scheduleId: number, prevent: boolean}>}
+ */
+function parseCardDoorAccess(xml) {
+  const listMatch = xml.match(/<CardDoorAccessList>([\s\S]*?)<\/CardDoorAccessList>/);
+  if (!listMatch) return [];
+  const entries = [];
+  const re = /<CardDoorAccess>([\s\S]*?)<\/CardDoorAccess>/g;
+  let m;
+  while ((m = re.exec(listMatch[1])) !== null) {
+    const block = m[1];
+    const doorId     = (block.match(/<DoorID>(\d+)<\/DoorID>/)     || [])[1];
+    const scheduleId = (block.match(/<ScheduleID>(\d+)<\/ScheduleID>/) || [])[1];
+    const prevent    = (block.match(/<Prevent>(\w+)<\/Prevent>/)   || [])[1];
+    if (doorId) {
+      entries.push({
+        doorId:     parseInt(doorId, 10),
+        scheduleId: parseInt(scheduleId || ALWAYS_VALID_SCHEDULE, 10),
+        prevent:    prevent === 'True',
+      });
+    }
+  }
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Fault checking — SmartService returns 200 even on errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Check a SmartService response for StandardFault XML and throw if found.
+ * @param {{status: number, body: string}} res
+ * @param {string} context - e.g. "POST Cards/907"
+ */
+function checkFault(res, context) {
+  if (res.body && res.body.includes('StandardFault')) {
+    const descMatch = res.body.match(/<FirstLanguageErrorDescription>([^<]*)<\/FirstLanguageErrorDescription>/);
+    const msgMatch  = res.body.match(/<Message>([^<]*)<\/Message>/);
+    const msg = descMatch ? descMatch[1] : (msgMatch ? msgMatch[1] : 'Unknown SmartService error');
+    throw new Error(`SmartService ${context}: ${msg}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Card operations via SmartService
+// ---------------------------------------------------------------------------
 
 /**
  * Get a card from SmartService.
@@ -192,14 +326,13 @@ async function getCard(id) {
   if (res.status !== 200) {
     throw new Error(`SmartService GET Cards/${id} returned ${res.status}: ${res.body}`);
   }
+  checkFault(res, `GET Cards/${id}`);
   return res.body;
 }
 
 /**
- * Update a card via SmartService.
- * @param {number} id      - Card PkData
- * @param {object} fields  - Card XML fields to set
- * @returns {number} The card ID on success
+ * Update a card via SmartService (flat fields only — card slots, etc.)
+ * WARNING: Do NOT include UserName in fields — it creates a duplicate record.
  */
 async function updateCard(id, fields) {
   const xml = buildCardXml(id, fields);
@@ -207,23 +340,40 @@ async function updateCard(id, fields) {
   if (res.status !== 200) {
     throw new Error(`SmartService PUT Cards/${id} returned ${res.status}: ${res.body}`);
   }
-  // Response is <int>id</int>
+  checkFault(res, `PUT Cards/${id}`);
   const match = res.body.match(/<int>(\d+)<\/int>/);
   return match ? parseInt(match[1]) : id;
 }
 
 /**
- * Create a card via SmartService.
- * @param {number} id      - Card PkData
- * @param {object} fields  - Card XML fields
- * @returns {number} The card ID on success
+ * Update a card via SmartService with full XML (flat fields + XML fragments).
+ * Used for access level and door exception changes.
+ * WARNING: Do NOT include UserName in fields — it creates a duplicate record.
  */
-async function createCard(id, fields) {
-  const xml = buildCardXml(id, fields);
+async function updateCardFull(id, fields, fragments) {
+  const xml = buildCardXmlFull(id, fields, fragments);
+  const res = await ssCall('PUT', `Cards/${id}`, { body: xml });
+  if (res.status !== 200) {
+    throw new Error(`SmartService PUT Cards/${id} returned ${res.status}: ${res.body}`);
+  }
+  checkFault(res, `PUT Cards/${id}`);
+  const match = res.body.match(/<int>(\d+)<\/int>/);
+  return match ? parseInt(match[1]) : id;
+}
+
+/**
+ * Create a card/user via SmartService.
+ * Accepts either flat fields or full XML string.
+ */
+async function createCard(id, fieldsOrXml) {
+  const xml = typeof fieldsOrXml === 'string'
+    ? fieldsOrXml
+    : buildCardXml(id, fieldsOrXml);
   const res = await ssCall('POST', `Cards/${id}`, { body: xml });
   if (res.status !== 200 && res.status !== 201) {
     throw new Error(`SmartService POST Cards/${id} returned ${res.status}: ${res.body}`);
   }
+  checkFault(res, `POST Cards/${id}`);
   const match = res.body.match(/<int>(\d+)<\/int>/);
   return match ? parseInt(match[1]) : id;
 }
@@ -236,17 +386,66 @@ async function deleteCard(id) {
   if (res.status !== 200) {
     throw new Error(`SmartService DELETE Cards/${id} returned ${res.status}: ${res.body}`);
   }
+  checkFault(res, `DELETE Cards/${id}`);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Access level operations via SmartService
+// ---------------------------------------------------------------------------
+
+/**
+ * Create an access level via SmartService POST AccessLevels/{id}.
+ */
+async function createAccessLevel(id, name, description, allValid = false) {
+  const xml = buildAccessLevelXml(id, name, description, allValid);
+  const res = await ssCall('POST', `AccessLevels/${id}`, { body: xml });
+  if (res.status !== 200 && res.status !== 201) {
+    throw new Error(`SmartService POST AccessLevels/${id} returned ${res.status}: ${res.body}`);
+  }
+  checkFault(res, `POST AccessLevels/${id}`);
+  const match = res.body.match(/<int>(\d+)<\/int>/);
+  return match ? parseInt(match[1]) : id;
+}
+
+/**
+ * Update an access level via SmartService PUT AccessLevels/{id}.
+ */
+async function updateAccessLevel(id, name, description) {
+  const xml = buildAccessLevelXml(id, name, description);
+  const res = await ssCall('PUT', `AccessLevels/${id}`, { body: xml });
+  if (res.status !== 200) {
+    throw new Error(`SmartService PUT AccessLevels/${id} returned ${res.status}: ${res.body}`);
+  }
+  checkFault(res, `PUT AccessLevels/${id}`);
   return true;
 }
 
 module.exports = {
+  // Session
   getSessionKey,
   refreshSession,
   logout,
   ssCall,
+  // Card CRUD
   getCard,
   updateCard,
+  updateCardFull,
   createCard,
   deleteCard,
+  // Card XML
   buildCardXml,
+  buildCardXmlFull,
+  buildAccessLevelsFragment,
+  buildDoorAccessFragment,
+  // Card XML parsing
+  parseCardAccessLevel,
+  parseCardDoorAccess,
+  // Access level CRUD
+  createAccessLevel,
+  updateAccessLevel,
+  // Constants
+  GATEWAY_SITE_ID,
+  DEFAULT_CARD_TYPE,
+  ALWAYS_VALID_SCHEDULE,
 };

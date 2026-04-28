@@ -15,7 +15,7 @@
 'use strict';
 
 const router = require('express').Router();
-const { query, esc, escStr } = require('../db');
+const { query, execute, esc, escStr } = require('../db');
 const { queryDay, enrichEvents } = require('./events');
 const { mapOutbound } = require('../field-map');
 const ss = require('../smartservice');

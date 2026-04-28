@@ -2,11 +2,11 @@
  * routes/lookup.js — Reference data endpoints (access levels, card types)
  *
  * GET    /api/v1/access-levels          all access levels
+ * POST   /api/v1/access-levels          create access level (via SmartService)
+ * PUT    /api/v1/access-levels/:id      update access level (via SmartService)
  * GET    /api/v1/card-types             all card types
  *
- * DISABLED (direct ADS writes bypass SmartService and cause sync issues):
- * POST   /api/v1/access-levels          create access level
- * PUT    /api/v1/access-levels/:id      update access level
+ * DISABLED (no SmartService endpoint):
  * POST   /api/v1/card-types             create card type
  * PUT    /api/v1/card-types/:id         update card type
  */
@@ -15,8 +15,9 @@
 
 const router = require('express').Router();
 const { query } = require('../db');
+const ss = require('../smartservice');
 
-const ADS_WRITE_ERROR = 'This operation is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please make this change through the EntraPass workstation instead.';
+const NO_SS_ENDPOINT = 'This operation is disabled. No SmartService endpoint exists for card types. Please make this change through the EntraPass workstation instead.';
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/access-levels

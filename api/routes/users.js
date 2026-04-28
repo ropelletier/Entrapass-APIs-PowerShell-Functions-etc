@@ -190,91 +190,12 @@ router.get('/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/users — create a new cardholder in EntraPass ADS
-//
-// Required body: { name }
-// Optional:      { id, state, email, externalId, info1..4,
-//                  startDate, endDate, cardType, accessLevel }
+// POST /api/v1/users — disabled (direct ADS writes cause SmartService sync issues)
 // ---------------------------------------------------------------------------
-router.post('/', async (req, res) => {
-  try {
-    const body = mapInbound(req.body);
-    const {
-      name,
-      state      = '0',
-      email      = '',
-      externalId = '',
-      startDate,
-      endDate,
-      cardType,
-      accessLevel,
-    } = body;
-    // Info1-4 are integer columns in ADS. Convention: Info1 = PkData, rest = 0.
-    // Accept user overrides but clamp to integer.
-    const toInt = (v, def) => (v !== undefined && !isNaN(Number(v))) ? Number(v) : def;
-
-    if (!name) return res.status(400).json({ error: 'name is required' });
-
-    // Auto-assign PkData if not provided
-    let pkData = body.id ? parseInt(body.id, 10) : null;
-    if (!pkData) {
-      const maxRows = await query('SELECT MAX(PkData) AS MaxID FROM Card');
-      pkData = (parseInt((maxRows[0] && maxRows[0].MaxID) || '0', 10) || 0) + 1;
-    }
-
-    // Resolve optional FKs
-    const ctId = cardType    ? await resolveCardType(cardType)       : null;
-    const alId = accessLevel ? await resolveAccessLevel(accessLevel) : null;
-
-    // Build Card INSERT
-    // ExternalUserID is a numeric column — default 0, accept numeric strings
-    const extIdNum = (externalId && !isNaN(Number(externalId))) ? Number(externalId) : 0;
-
-    const i1 = toInt(body.info1, pkData);  // convention: Info1 = PkData
-    const i2 = toInt(body.info2, 0);
-    const i3 = toInt(body.info3, 0);
-    const i4 = toInt(body.info4, 0);
-
-    const cols = ['PkData', 'UserName', 'State', 'Email', 'ExternalUserID',
-                  'Info1', 'Info2', 'Info3', 'Info4'];
-    const vals = [pkData, escStr(name), esc(state), escStr(email), extIdNum,
-                  i1, i2, i3, i4];
-
-    if (startDate !== undefined) { cols.push('StartDate');    vals.push(escStr(startDate)); }
-    if (endDate   !== undefined) { cols.push('EndDate');      vals.push(escStr(endDate));
-                                   cols.push('UsingEndDate'); vals.push(1); }
-    if (ctId      !== null)      { cols.push('FkCardType');   vals.push(ctId); }
-
-    await execute(`INSERT INTO Card (${cols.join(', ')}) VALUES (${vals.join(', ')})`);
-
-    // Create ItemCard row (access level assignment)
-    if (alId !== null) {
-      await execute(
-        `INSERT INTO ItemCard (FkDataCard, FkDataGSI, ObjectCard, FkICDataAccessLevel,
-           FkICDataAccessLevel1, ICDataWhenExpired1,
-           FkICDataAccessLevel2, ICDataWhenExpired2,
-           FkICDataAccessLevel3, ICDataWhenExpired3,
-           FkICDataAccessLevel4, ICDataWhenExpired4,
-           FkICDataAccessLevel5, ICDataWhenExpired5,
-           FkICDataAccessLevel6, ICDataWhenExpired6,
-           FkICDataAccessLevel7, ICDataWhenExpired7,
-           FkICDataAccessLevel8, ICDataWhenExpired8,
-           FkICDataAccessLevel9, ICDataWhenExpired9,
-           FkICDataAccessLevel10, ICDataWhenExpired10,
-           FkICDataAccessLevel11, ICDataWhenExpired11,
-           FkICDataAccessLevel12, ICDataWhenExpired12,
-           CDataExpired, FkICDataSchedule, DoorExceptionMode, FkICDataPanelComponent)
-         VALUES (${pkData}, 67, 38, ${alId},
-           0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
-           0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
-           0, 0, 0, 0)`
-      );
-    }
-
-    res.status(201).json({ id: pkData, name, state, email, externalId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.post('/', (req, res) => {
+  res.status(403).json({
+    error: 'Creating users via the API is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please create users through the EntraPass workstation instead.',
+  });
 });
 
 // ---------------------------------------------------------------------------

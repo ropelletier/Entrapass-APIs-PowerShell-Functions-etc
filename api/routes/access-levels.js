@@ -2,20 +2,17 @@
  * routes/access-levels.js
  *
  * GET    /api/v1/users/:id/access-level                 get cardholder's main access level
+ * PUT    /api/v1/users/:id/access-level                 set or clear access level (via SmartService)
  * GET    /api/v1/users/:id/access-exceptions            list door exceptions
- *
- * DISABLED (direct ADS writes bypass SmartService and cause sync issues):
- * PUT    /api/v1/users/:id/access-level                 set (or clear) main access level
- * POST   /api/v1/users/:id/access-exceptions            add a door exception
- * DELETE /api/v1/users/:id/access-exceptions/:componentId  remove a door exception
+ * POST   /api/v1/users/:id/access-exceptions            add door exception (via SmartService)
+ * DELETE /api/v1/users/:id/access-exceptions/:componentId  remove door exception (via SmartService)
  */
 
 'use strict';
 
 const router = require('express').Router();
-const { query, esc } = require('../db');
-
-const ADS_WRITE_ERROR = 'This operation is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please make this change through the EntraPass workstation instead.';
+const { query, esc, escStr } = require('../db');
+const ss = require('../smartservice');
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/users/:id/access-level
@@ -42,10 +39,57 @@ router.get('/:id/access-level', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/users/:id/access-level — DISABLED
+// PUT /api/v1/users/:id/access-level — set or clear via SmartService
+//
+// Body: { accessLevelId: 69 }            - assign by PK
+//       { accessLevelName: "Bus Driver" } - assign by name (case-insensitive)
+//       { accessLevelId: 0 }             - clear
+//       { accessLevelId: null }          - clear
 // ---------------------------------------------------------------------------
-router.put('/:id/access-level', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+router.put('/:id/access-level', async (req, res) => {
+  try {
+    const pkCard = parseInt(req.params.id, 10);
+    if (isNaN(pkCard)) return res.status(400).json({ error: 'id must be a number' });
+
+    let { accessLevelId, accessLevelName } = req.body;
+
+    // Resolve by name if ID not provided
+    if ((accessLevelId === undefined || accessLevelId === null) && accessLevelName) {
+      const found = await query(
+        `SELECT PkData FROM AccessLevel WHERE UPPER(Description1) = UPPER(${escStr(accessLevelName)})`
+      );
+      if (!found.length) return res.status(404).json({ error: `Access level not found: ${accessLevelName}` });
+      accessLevelId = parseInt(found[0].PkData, 10);
+    }
+
+    const clearing = !accessLevelId || parseInt(accessLevelId, 10) === 0;
+    const fkLevel  = clearing ? 0 : parseInt(accessLevelId, 10);
+
+    // Verify cardholder exists in ADS
+    const cardRows = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(pkCard)}`);
+    if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
+
+    // Verify access level exists (if not clearing)
+    if (!clearing) {
+      const alRows = await query(`SELECT PkData, Description1 FROM AccessLevel WHERE PkData = ${esc(fkLevel)}`);
+      if (!alRows.length) return res.status(404).json({ error: `Access level ID ${fkLevel} not found` });
+      accessLevelName = alRows[0].Description1;
+    }
+
+    // Build Card XML with ONLY ID + CardAccessLevels (no UserName — avoids duplicate bug)
+    const fragment = ss.buildAccessLevelsFragment(clearing ? 0 : fkLevel);
+    await ss.updateCardFull(pkCard, {}, [fragment]);
+
+    res.json({
+      ok:              true,
+      cardholderId:    pkCard,
+      accessLevelId:   clearing ? null : fkLevel,
+      accessLevelName: clearing ? null : accessLevelName,
+    });
+  } catch (err) {
+    console.error('PUT /access-level error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -77,17 +121,84 @@ router.get('/:id/access-exceptions', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/users/:id/access-exceptions — DISABLED
+// POST /api/v1/users/:id/access-exceptions — add via SmartService
+//
+// Body: { componentId: 591 }
+//       { componentId: 591, scheduleId: 25, doorExceptionMode: 0 }
 // ---------------------------------------------------------------------------
-router.post('/:id/access-exceptions', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+router.post('/:id/access-exceptions', async (req, res) => {
+  try {
+    const pkCard = parseInt(req.params.id, 10);
+    if (isNaN(pkCard)) return res.status(400).json({ error: 'id must be a number' });
+
+    const { componentId, scheduleId, doorExceptionMode } = req.body;
+    if (!componentId) return res.status(400).json({ error: 'componentId is required' });
+
+    const doorId   = parseInt(componentId, 10);
+    const schedId  = parseInt(scheduleId || ss.ALWAYS_VALID_SCHEDULE, 10);
+    const prevent  = parseInt(doorExceptionMode || 0, 10) === 1;
+
+    // Verify cardholder exists
+    const cardRows = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(pkCard)}`);
+    if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
+
+    // Get current card from SmartService and parse existing exceptions
+    const cardXml = await ss.getCard(pkCard);
+    const existing = ss.parseCardDoorAccess(cardXml);
+
+    // Check for duplicate
+    if (existing.some(e => e.doorId === doorId)) {
+      return res.status(409).json({ error: `Exception already exists for component ${componentId}` });
+    }
+
+    // Append new exception and PUT back the full list
+    existing.push({ doorId, scheduleId: schedId, prevent });
+    const fragment = ss.buildDoorAccessFragment(existing);
+    await ss.updateCardFull(pkCard, {}, [fragment]);
+
+    res.status(201).json({
+      ok:                true,
+      cardholderId:      pkCard,
+      componentId:       doorId,
+      scheduleId:        schedId,
+      doorExceptionMode: prevent ? 1 : 0,
+    });
+  } catch (err) {
+    console.error('POST /access-exceptions error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
-// DELETE /api/v1/users/:id/access-exceptions/:componentId — DISABLED
+// DELETE /api/v1/users/:id/access-exceptions/:componentId — remove via SmartService
 // ---------------------------------------------------------------------------
-router.delete('/:id/access-exceptions/:componentId', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+router.delete('/:id/access-exceptions/:componentId', async (req, res) => {
+  try {
+    const pkCard = parseInt(req.params.id, 10);
+    const doorId = parseInt(req.params.componentId, 10);
+    if (isNaN(pkCard) || isNaN(doorId)) return res.status(400).json({ error: 'id and componentId must be numbers' });
+
+    // Verify cardholder exists
+    const cardRows = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(pkCard)}`);
+    if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
+
+    // Get current card and parse exceptions
+    const cardXml = await ss.getCard(pkCard);
+    const existing = ss.parseCardDoorAccess(cardXml);
+
+    const idx = existing.findIndex(e => e.doorId === doorId);
+    if (idx === -1) return res.status(404).json({ error: `Exception not found for component ${doorId}` });
+
+    // Remove and PUT back
+    existing.splice(idx, 1);
+    const fragment = ss.buildDoorAccessFragment(existing);
+    await ss.updateCardFull(pkCard, {}, [fragment]);
+
+    res.json({ ok: true, cardholderId: pkCard, componentId: doorId });
+  } catch (err) {
+    console.error('DELETE /access-exceptions error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

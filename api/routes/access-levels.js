@@ -92,40 +92,10 @@ router.post('/:id/access-exceptions', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// DELETE /api/v1/users/:id/access-exceptions/:componentId
+// DELETE /api/v1/users/:id/access-exceptions/:componentId — DISABLED
 // ---------------------------------------------------------------------------
-router.delete('/:id/access-exceptions/:componentId', async (req, res) => {
-  try {
-    const pkCard = esc(parseInt(req.params.id,          10));
-    const fkGsi  = esc(parseInt(req.params.componentId, 10));
-
-    const cardRows = await query(`SELECT PkData, TransactionId FROM Card WHERE PkData = ${pkCard}`);
-    if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
-
-    const existing = await query(
-      `SELECT FkDataCard FROM ItemCard WHERE FkDataCard = ${pkCard} AND ObjectCard = 12 AND FkDataGSI = ${fkGsi}`
-    );
-    if (!existing.length) return res.status(404).json({ error: `Exception not found for component ${req.params.componentId}` });
-
-    await execute(
-      `DELETE FROM ItemCard WHERE FkDataCard = ${pkCard} AND ObjectCard = 12 AND FkDataGSI = ${fkGsi}`
-    );
-
-    const newCount    = await itemCount(pkCard);
-    const currentTxId = parseInt(cardRows[0].TransactionId || '0', 10);
-    await execute(
-      `UPDATE Card SET ItemCount = ${newCount},
-                       TransactionId  = ${currentTxId + 1},
-                       TransactionTag = NOW()
-       WHERE PkData = ${pkCard}`
-    );
-
-    await notifyGateway(pkCard);
-
-    res.json({ ok: true, cardholderId: req.params.id, componentId: parseInt(req.params.componentId, 10) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.delete('/:id/access-exceptions/:componentId', (req, res) => {
+  res.status(403).json({ error: ADS_WRITE_ERROR });
 });
 
 module.exports = router;

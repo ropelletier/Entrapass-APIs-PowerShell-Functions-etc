@@ -199,28 +199,6 @@ router.post('/', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Lookup helpers — resolve access level or card type by name or numeric ID
-// ---------------------------------------------------------------------------
-
-async function resolveAccessLevel(nameOrId) {
-  if (!isNaN(Number(nameOrId))) return Number(nameOrId);
-  const rows = await query(
-    `SELECT PkData FROM AccessLevel WHERE UPPER(Description1) = UPPER(${escStr(nameOrId)})`
-  );
-  if (!rows.length) throw new Error(`Access level not found: ${nameOrId}`);
-  return parseInt(rows[0].PkData, 10);
-}
-
-async function resolveCardType(nameOrId) {
-  if (!isNaN(Number(nameOrId))) return Number(nameOrId);
-  const rows = await query(
-    `SELECT PkData FROM CardType WHERE UPPER(Description1) = UPPER(${escStr(nameOrId)})`
-  );
-  if (!rows.length) throw new Error(`Card type not found: ${nameOrId}`);
-  return parseInt(rows[0].PkData, 10);
-}
-
-// ---------------------------------------------------------------------------
 // PUT /api/v1/users/:id — disabled (direct ADS writes cause SmartService sync issues)
 // ---------------------------------------------------------------------------
 router.put('/:id', (req, res) => {

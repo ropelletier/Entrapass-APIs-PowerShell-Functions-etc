@@ -50,84 +50,10 @@ router.get('/:id/access-level', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/users/:id/access-level
-//
-// Body: { accessLevelId: 69 }            - assign by PK
-//       { accessLevelName: "Bus Driver" } - assign by name (case-insensitive)
-//       { accessLevelId: 0 }             - clear (removes ObjectCard=38 row)
-//       { accessLevelId: null }          - same as clear
+// PUT /api/v1/users/:id/access-level — DISABLED
 // ---------------------------------------------------------------------------
-router.put('/:id/access-level', async (req, res) => {
-  try {
-    const pkCard = esc(parseInt(req.params.id, 10));
-    let { accessLevelId, accessLevelName } = req.body;
-
-    // Resolve by name if ID not provided
-    if ((accessLevelId === undefined || accessLevelId === null) && accessLevelName) {
-      const found = await query(
-        `SELECT PkData FROM AccessLevel WHERE UPPER(Description1) = UPPER(${escStr(accessLevelName)})`
-      );
-      if (!found.length) return res.status(404).json({ error: `Access level not found: ${accessLevelName}` });
-      accessLevelId = parseInt(found[0].PkData, 10);
-    }
-
-    const clearing = !accessLevelId || parseInt(accessLevelId, 10) === 0;
-    const fkLevel  = clearing ? 0 : parseInt(accessLevelId, 10);
-
-    // Verify cardholder exists
-    const cardRows = await query(`SELECT PkData, TransactionId FROM Card WHERE PkData = ${pkCard}`);
-    if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
-
-    // Check for existing main access level row (ObjectCard=38)
-    const existing = await query(`SELECT FkDataCard FROM ItemCard WHERE FkDataCard = ${pkCard} AND ObjectCard = 38`);
-
-    if (clearing) {
-      // Delete the main access level row (desktop behavior: DELETE, not update to 0)
-      if (existing.length) {
-        await execute(`DELETE FROM ItemCard WHERE FkDataCard = ${pkCard} AND ObjectCard = 38`);
-      }
-    } else {
-      // Verify the access level exists
-      const alRows = await query(`SELECT PkData, Description1 FROM AccessLevel WHERE PkData = ${esc(fkLevel)}`);
-      if (!alRows.length) return res.status(404).json({ error: `Access level ID ${fkLevel} not found` });
-
-      if (existing.length) {
-        await execute(
-          `UPDATE ItemCard SET FkICDataAccessLevel = ${esc(fkLevel)} WHERE FkDataCard = ${pkCard} AND ObjectCard = 38`
-        );
-      } else {
-        // INSERT new main access level row.
-        // FkDataGSI=67, ObjectCard=38 are confirmed installation-wide constants for
-        // main access level rows (138 rows all use this combination).
-        await execute(
-          `INSERT INTO ItemCard (FkDataCard, FkDataGSI, ObjectCard, FkICDataAccessLevel)
-           VALUES (${pkCard}, 67, 38, ${esc(fkLevel)})`
-        );
-      }
-      accessLevelName = alRows[0].Description1;
-    }
-
-    // ItemCount = total ItemCard rows after change
-    const newCount    = await itemCount(pkCard);
-    const currentTxId = parseInt((await query(`SELECT TransactionId FROM Card WHERE PkData = ${pkCard}`))[0].TransactionId || '0', 10);
-    await execute(
-      `UPDATE Card SET ItemCount = ${newCount},
-                       TransactionId  = ${currentTxId + 1},
-                       TransactionTag = NOW()
-       WHERE PkData = ${pkCard}`
-    );
-
-    await notifyGateway(pkCard);
-
-    res.json({
-      ok:              true,
-      cardholderId:    req.params.id,
-      accessLevelId:   clearing ? null : fkLevel,
-      accessLevelName: clearing ? null : accessLevelName,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.put('/:id/access-level', (req, res) => {
+  res.status(403).json({ error: ADS_WRITE_ERROR });
 });
 
 // ---------------------------------------------------------------------------

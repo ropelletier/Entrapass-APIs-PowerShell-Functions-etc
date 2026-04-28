@@ -261,14 +261,60 @@ router.post('/', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/users/:id — DISABLED
-// SmartService PUT Cards with UserName creates duplicate records instead of
-// updating in place. Needs investigation of ImportCards/{id} (upsert) endpoint.
+// PUT /api/v1/users/:id — update cardholder fields
+//
+// Updatable: name, email, cardType, cardInfo1-5
+//
+// Name changes go through ADS (SmartService PUT with UserName creates
+// duplicates), then a no-op PUT flushes SmartService's cache.
+// All other fields go through SmartService PUT Cards/{id} directly.
 // ---------------------------------------------------------------------------
-router.put('/:id', (req, res) => {
-  res.status(403).json({
-    error: 'Updating user fields (name, email) via the API is not yet supported. SmartService PUT Cards with user identity fields creates duplicate records. Use the EntraPass workstation for user field changes.',
-  });
+router.put('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const { name, email, cardType, cardInfo1, cardInfo2, cardInfo3, cardInfo4, cardInfo5 } = req.body;
+
+    // Verify cardholder exists
+    const existing = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(id)}`);
+    if (!existing.length) return res.status(404).json({ error: 'User not found' });
+
+    let updated = 0;
+
+    // Name changes must go through ADS (SmartService duplicates on UserName change)
+    if (name !== undefined) {
+      await execute(`UPDATE Card SET UserName = ${escStr(name)} WHERE PkData = ${esc(id)}`);
+      updated++;
+    }
+
+    // All other fields go through SmartService PUT
+    const ssFields = {};
+    if (email !== undefined)     { ssFields.Email = email;           updated++; }
+    if (cardType !== undefined)  { ssFields.CardType = cardType;     updated++; }
+    if (cardInfo1 !== undefined) { ssFields.CardInfo1 = cardInfo1;   updated++; }
+    if (cardInfo2 !== undefined) { ssFields.CardInfo2 = cardInfo2;   updated++; }
+    if (cardInfo3 !== undefined) { ssFields.CardInfo3 = cardInfo3;   updated++; }
+    if (cardInfo4 !== undefined) { ssFields.CardInfo4 = cardInfo4;   updated++; }
+    if (cardInfo5 !== undefined) { ssFields.CardInfo5 = cardInfo5;   updated++; }
+
+    if (!updated) {
+      return res.status(400).json({ error: 'No recognised fields to update' });
+    }
+
+    if (Object.keys(ssFields).length) {
+      // PUT to SmartService with non-name fields
+      await ss.updateCard(id, ssFields);
+    } else if (name !== undefined) {
+      // Name-only change: send a no-op PUT to flush SmartService cache
+      await ss.updateCardFull(id, {}, []);
+    }
+
+    res.json({ ok: true, id, updated });
+  } catch (err) {
+    console.error('PUT /users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

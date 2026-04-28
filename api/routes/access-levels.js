@@ -170,7 +170,11 @@ router.post('/:id/access-exceptions', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// DELETE /api/v1/users/:id/access-exceptions/:componentId — remove via SmartService
+// DELETE /api/v1/users/:id/access-exceptions/:componentId
+//
+// SmartService ignores empty CardDoorAccessList (treats as "no change"),
+// so exception removal uses a direct ADS delete on the ItemCard row.
+// This is safe because ItemCard is not cached by SmartService.
 // ---------------------------------------------------------------------------
 router.delete('/:id/access-exceptions/:componentId', async (req, res) => {
   try {
@@ -182,17 +186,16 @@ router.delete('/:id/access-exceptions/:componentId', async (req, res) => {
     const cardRows = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(pkCard)}`);
     if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
 
-    // Get current card and parse exceptions
-    const cardXml = await ss.getCard(pkCard);
-    const existing = ss.parseCardDoorAccess(cardXml);
+    // Verify exception exists
+    const existing = await query(
+      `SELECT FkDataCard FROM ItemCard WHERE FkDataCard = ${esc(pkCard)} AND ObjectCard = 12 AND FkDataGSI = ${esc(doorId)}`
+    );
+    if (!existing.length) return res.status(404).json({ error: `Exception not found for component ${doorId}` });
 
-    const idx = existing.findIndex(e => e.doorId === doorId);
-    if (idx === -1) return res.status(404).json({ error: `Exception not found for component ${doorId}` });
-
-    // Remove and PUT back
-    existing.splice(idx, 1);
-    const fragment = ss.buildDoorAccessFragment(existing);
-    await ss.updateCardFull(pkCard, {}, [fragment]);
+    // Delete the ItemCard row directly (SmartService can't clear exceptions via PUT)
+    await execute(
+      `DELETE FROM ItemCard WHERE FkDataCard = ${esc(pkCard)} AND ObjectCard = 12 AND FkDataGSI = ${esc(doorId)}`
+    );
 
     res.json({ ok: true, cardholderId: pkCard, componentId: doorId });
   } catch (err) {

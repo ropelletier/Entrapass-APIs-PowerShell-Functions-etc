@@ -1,26 +1,13 @@
 /**
  * routes/access-levels.js
  *
- * GET    /api/v1/access-levels                          list all access levels
  * GET    /api/v1/users/:id/access-level                 get cardholder's main access level
- * PUT    /api/v1/users/:id/access-level                 set (or clear) main access level
  * GET    /api/v1/users/:id/access-exceptions            list door exceptions
+ *
+ * DISABLED (direct ADS writes bypass SmartService and cause sync issues):
+ * PUT    /api/v1/users/:id/access-level                 set (or clear) main access level
  * POST   /api/v1/users/:id/access-exceptions            add a door exception
  * DELETE /api/v1/users/:id/access-exceptions/:componentId  remove a door exception
- *
- * Reverse-engineered from Watch-KantechChanges monitor sessions:
- *
- * Main access level (ObjectCard=38):
- *   - One ItemCard row per cardholder: FkDataGSI=67, ObjectCard=38
- *   - FkICDataAccessLevel = access level PK
- *   - To SET: INSERT with FkDataGSI=67/ObjectCard=38, or UPDATE existing
- *   - To CLEAR: DELETE the ObjectCard=38 row (desktop does DELETE, not update to 0)
- *   - Card.ItemCount = total ItemCard rows for this cardholder (all types)
- *
- * Door exceptions (ObjectCard=12):
- *   - One ItemCard row per door: FkDataGSI=door/component PK, ObjectCard=12
- *   - FkICDataSchedule=25 ("Always valid"), FkICDataAccessLevel=0
- *   - Card.ItemCount counts these rows too
  */
 
 'use strict';

@@ -41,17 +41,51 @@ router.get('/access-levels', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/access-levels — DISABLED
+// POST /api/v1/access-levels — create via SmartService
+//
+// Required: { name }
+// Optional: { description, allValid }
 // ---------------------------------------------------------------------------
-router.post('/access-levels', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+router.post('/access-levels', async (req, res) => {
+  try {
+    const { name, description, allValid = false } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const maxRows = await query('SELECT MAX(PkData) AS MaxPk FROM AccessLevel');
+    const nextId = (parseInt((maxRows[0] && maxRows[0].MaxPk) || '0', 10) || 0) + 1;
+
+    const resultId = await ss.createAccessLevel(nextId, name, description || name, !!allValid);
+
+    res.status(201).json({ ok: true, id: resultId, name, description: description || name, allValid: !!allValid });
+  } catch (err) {
+    console.error('POST /access-levels error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/access-levels/:id — DISABLED
+// PUT /api/v1/access-levels/:id — update via SmartService
+//
+// Updatable: name, description
 // ---------------------------------------------------------------------------
-router.put('/access-levels/:id', (req, res) => {
-  res.status(403).json({ error: ADS_WRITE_ERROR });
+router.put('/access-levels/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const { name, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const existing = await query(`SELECT PkData FROM AccessLevel WHERE PkData = ${id}`);
+    if (!existing.length) return res.status(404).json({ error: `Access level ${id} not found` });
+
+    await ss.updateAccessLevel(id, name, description || name);
+
+    res.json({ ok: true, id, name, description: description || name });
+  } catch (err) {
+    console.error('PUT /access-levels error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

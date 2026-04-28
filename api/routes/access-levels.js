@@ -85,61 +85,10 @@ router.get('/:id/access-exceptions', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/users/:id/access-exceptions
-//
-// Body: { componentId: 591 }
-//       { componentId: 591, scheduleId: 25, doorExceptionMode: 0 }
-//
-//   scheduleId       — defaults to 25 ("Always valid")
-//   doorExceptionMode — 0 = grant access (default), 1 = deny access
+// POST /api/v1/users/:id/access-exceptions — DISABLED
 // ---------------------------------------------------------------------------
-router.post('/:id/access-exceptions', async (req, res) => {
-  try {
-    const pkCard = esc(parseInt(req.params.id, 10));
-    const { componentId, scheduleId, doorExceptionMode } = req.body;
-
-    if (!componentId) return res.status(400).json({ error: 'componentId is required' });
-
-    const fkGsi      = esc(parseInt(componentId,                   10));
-    const fkSchedule = esc(parseInt(scheduleId        || 25,       10));
-    const exMode     = esc(parseInt(doorExceptionMode || 0,        10));
-
-    // Verify cardholder exists
-    const cardRows = await query(`SELECT PkData, TransactionId FROM Card WHERE PkData = ${pkCard}`);
-    if (!cardRows.length) return res.status(404).json({ error: 'Cardholder not found' });
-
-    // Check if exception already exists for this component
-    const existing = await query(
-      `SELECT FkDataCard FROM ItemCard WHERE FkDataCard = ${pkCard} AND ObjectCard = 12 AND FkDataGSI = ${fkGsi}`
-    );
-    if (existing.length) return res.status(409).json({ error: `Exception already exists for component ${componentId}` });
-
-    await execute(
-      `INSERT INTO ItemCard (FkDataCard, FkDataGSI, ObjectCard, FkICDataAccessLevel, FkICDataSchedule, DoorExceptionMode)
-       VALUES (${pkCard}, ${fkGsi}, 12, 0, ${fkSchedule}, ${exMode})`
-    );
-
-    const newCount    = await itemCount(pkCard);
-    const currentTxId = parseInt(cardRows[0].TransactionId || '0', 10);
-    await execute(
-      `UPDATE Card SET ItemCount = ${newCount},
-                       TransactionId  = ${currentTxId + 1},
-                       TransactionTag = NOW()
-       WHERE PkData = ${pkCard}`
-    );
-
-    await notifyGateway(pkCard);
-
-    res.status(201).json({
-      ok:                true,
-      cardholderId:      req.params.id,
-      componentId:       parseInt(componentId,       10),
-      scheduleId:        parseInt(scheduleId || 25,  10),
-      doorExceptionMode: parseInt(doorExceptionMode || 0, 10),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.post('/:id/access-exceptions', (req, res) => {
+  res.status(403).json({ error: ADS_WRITE_ERROR });
 });
 
 // ---------------------------------------------------------------------------

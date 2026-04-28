@@ -99,17 +99,75 @@ router.get('/card-types', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/card-types — DISABLED (no SmartService endpoint)
+// POST /api/v1/card-types — create via ADS
+//
+// No SmartService endpoint exists for card types. ADS writes are safe here
+// because our GET reads from ADS and SmartService picks up the FkCardType
+// value when it reads Card records.
+//
+// Required: { name }
+// Optional: { description }
 // ---------------------------------------------------------------------------
-router.post('/card-types', (req, res) => {
-  res.status(403).json({ error: NO_SS_ENDPOINT });
+router.post('/card-types', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const meta = await query(
+      'SELECT MAX(PkData) AS MaxPk, MIN(FkObject) AS FkObj, MIN(FkParent) AS FkPar, MAX(Info1) AS MaxInfo FROM CardType'
+    );
+    const m      = meta[0] || {};
+    const pkData = (parseInt(m.MaxPk || '0', 10) || 0) + 1;
+    const info1  = (parseInt(m.MaxInfo || '0', 10) || 0) + 1;
+    const fkObj  = parseInt(m.FkObj || '8', 10);
+    const fkPar  = parseInt(m.FkPar || '16', 10);
+    const desc   = description || name;
+
+    await execute(
+      `INSERT INTO CardType
+         (PkData, FkObject, FkParent, MasterAccount, Account, Cluster,
+          NTM, GSI, Site, Info1, Info2, Info3, Info4,
+          State, Description1, Description2, FkAssignCardAccessGroup, NotifyBeforeAssign)
+       VALUES
+         (${pkData}, ${fkObj}, ${fkPar}, 0, 0, 0,
+          0, 0, 0, ${info1}, 0, 0, 0,
+          2, ${escStr(name)}, ${escStr(desc)}, 0, 0)`
+    );
+
+    res.status(201).json({ ok: true, id: pkData, name, description: desc });
+  } catch (err) {
+    console.error('POST /card-types error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/card-types/:id — DISABLED (no SmartService endpoint)
+// PUT /api/v1/card-types/:id — update via ADS
+//
+// Updatable: name, description
 // ---------------------------------------------------------------------------
-router.put('/card-types/:id', (req, res) => {
-  res.status(403).json({ error: NO_SS_ENDPOINT });
+router.put('/card-types/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    const { name, description } = req.body;
+    const sets = [];
+    if (name !== undefined)        sets.push(`Description1 = ${escStr(name)}`);
+    if (description !== undefined)  sets.push(`Description2 = ${escStr(description)}`);
+
+    if (!sets.length) return res.status(400).json({ error: 'No recognised fields to update' });
+
+    const existing = await query(`SELECT PkData FROM CardType WHERE PkData = ${esc(id)}`);
+    if (!existing.length) return res.status(404).json({ error: `Card type ${id} not found` });
+
+    await execute(`UPDATE CardType SET ${sets.join(', ')} WHERE PkData = ${esc(id)}`);
+
+    res.json({ ok: true, id, updated: sets.length });
+  } catch (err) {
+    console.error('PUT /card-types error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

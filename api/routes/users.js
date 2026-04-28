@@ -193,20 +193,81 @@ router.get('/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/users — disabled (direct ADS writes cause SmartService sync issues)
+// POST /api/v1/users — create cardholder via SmartService
+//
+// Required body: { name }
+// Optional:      { email, cardType, accessLevel }
+//
+//   cardType    — card type ID (default 18 = Employee)
+//   accessLevel — access level ID or name (case-insensitive)
 // ---------------------------------------------------------------------------
-router.post('/', (req, res) => {
-  res.status(403).json({
-    error: 'Creating users via the API is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please create users through the EntraPass workstation instead.',
-  });
+router.post('/', async (req, res) => {
+  try {
+    const { name, email, cardType, accessLevel } = req.body;
+
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    // Auto-assign next available PkData
+    const maxRows = await query('SELECT MAX(PkData) AS MaxID FROM Card');
+    const newId = (parseInt((maxRows[0] && maxRows[0].MaxID) || '0', 10) || 0) + 1;
+
+    // Resolve access level (by name or ID)
+    let accessLevelId = null;
+    let accessLevelName = null;
+    if (accessLevel !== undefined && accessLevel !== null && accessLevel !== '') {
+      if (!isNaN(Number(accessLevel))) {
+        accessLevelId = parseInt(accessLevel, 10);
+        const alRows = await query(`SELECT Description1 FROM AccessLevel WHERE PkData = ${esc(accessLevelId)}`);
+        if (!alRows.length) return res.status(404).json({ error: `Access level ID ${accessLevelId} not found` });
+        accessLevelName = alRows[0].Description1;
+      } else {
+        const alRows = await query(
+          `SELECT PkData, Description1 FROM AccessLevel WHERE UPPER(Description1) = UPPER(${escStr(accessLevel)})`
+        );
+        if (!alRows.length) return res.status(404).json({ error: `Access level not found: ${accessLevel}` });
+        accessLevelId = parseInt(alRows[0].PkData, 10);
+        accessLevelName = alRows[0].Description1;
+      }
+    }
+
+    // Build Card XML with flat fields + optional access level fragment
+    const flatFields = {
+      UserName: name,
+      CardType: cardType || ss.DEFAULT_CARD_TYPE,
+    };
+    if (email) flatFields.Email = email;
+
+    const fragments = [];
+    if (accessLevelId) {
+      fragments.push(ss.buildAccessLevelsFragment(accessLevelId));
+    }
+
+    const xml = ss.buildCardXmlFull(newId, flatFields, fragments);
+    const resultId = await ss.createCard(newId, xml);
+
+    res.status(201).json({
+      ok:              true,
+      id:              resultId,
+      name,
+      email:           email || '',
+      cardType:        parseInt(cardType || ss.DEFAULT_CARD_TYPE, 10),
+      accessLevelId:   accessLevelId,
+      accessLevelName: accessLevelName,
+    });
+  } catch (err) {
+    console.error('POST /users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/users/:id — disabled (direct ADS writes cause SmartService sync issues)
+// PUT /api/v1/users/:id — DISABLED
+// SmartService PUT Cards with UserName creates duplicate records instead of
+// updating in place. Needs investigation of ImportCards/{id} (upsert) endpoint.
 // ---------------------------------------------------------------------------
 router.put('/:id', (req, res) => {
   res.status(403).json({
-    error: 'Updating users via the API is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please update users through the EntraPass workstation instead.',
+    error: 'Updating user fields (name, email) via the API is not yet supported. SmartService PUT Cards with user identity fields creates duplicate records. Use the EntraPass workstation for user field changes.',
   });
 });
 

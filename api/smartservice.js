@@ -242,6 +242,7 @@ async function deleteCard(id) {
 module.exports = {
   getSessionKey,
   refreshSession,
+  logout,
   ssCall,
   getCard,
   updateCard,

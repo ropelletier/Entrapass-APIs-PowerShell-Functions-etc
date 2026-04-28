@@ -18,14 +18,6 @@ const { query, esc, escStr } = require('../db');
 const ADS_WRITE_ERROR = 'This operation is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please make this change through the EntraPass workstation instead.';
 
 // ---------------------------------------------------------------------------
-// Helper: get total ItemCard row count for a cardholder
-// ---------------------------------------------------------------------------
-async function itemCount(pkCardEscaped) {
-  const rows = await query(`SELECT COUNT(*) AS cnt FROM ItemCard WHERE FkDataCard = ${pkCardEscaped}`);
-  return parseInt(rows[0].cnt || '0', 10);
-}
-
-// ---------------------------------------------------------------------------
 // GET /api/v1/users/:id/access-level
 // ---------------------------------------------------------------------------
 router.get('/:id/access-level', async (req, res) => {

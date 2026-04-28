@@ -9,9 +9,7 @@
  * GET  /api/v1/users/:id                  single user by CardholderID
  * GET  /api/v1/users/:id/cards            all cards assigned to a user
  * POST /api/v1/users                      create new cardholder (via SmartService)
- *
- * DISABLED (PUT Cards with UserName creates duplicate records):
- * PUT  /api/v1/users/:id                  update cardholder fields
+ * PUT  /api/v1/users/:id                  update cardholder fields (name via ADS, rest via SmartService)
  */
 
 'use strict';

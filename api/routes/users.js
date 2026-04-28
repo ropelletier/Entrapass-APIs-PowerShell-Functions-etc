@@ -221,89 +221,12 @@ async function resolveCardType(nameOrId) {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/users/:id — update cardholder fields
-//
-// Card table:    name, state, email, externalId, info1..4, cardInfo1..5,
-//                startDate, endDate, cardType
-// ItemCard table: accessLevel, accessException, accessExceptionExpiry
-// Only supplied fields are updated.
+// PUT /api/v1/users/:id — disabled (direct ADS writes cause SmartService sync issues)
 // ---------------------------------------------------------------------------
-router.put('/:id', async (req, res) => {
-  try {
-    const id   = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-    const body = mapInbound(req.body);
-
-    // --- Card table ---
-    // String columns on Card
-    const cardStringMap = {
-      name:      'UserName',
-      state:     'State',
-      email:     'Email',
-      cardInfo1: 'CardInfo1', cardInfo2: 'CardInfo2', cardInfo3: 'CardInfo3',
-      cardInfo4: 'CardInfo4', cardInfo5: 'CardInfo5',
-    };
-    // Integer columns on Card
-    const cardIntMap = { info1: 'Info1', info2: 'Info2', info3: 'Info3', info4: 'Info4' };
-
-    const cardSets = [];
-    for (const [bodyKey, colName] of Object.entries(cardStringMap)) {
-      if (body[bodyKey] !== undefined) cardSets.push(`${colName} = ${escStr(body[bodyKey])}`);
-    }
-    for (const [bodyKey, colName] of Object.entries(cardIntMap)) {
-      if (body[bodyKey] !== undefined && !isNaN(Number(body[bodyKey]))) {
-        cardSets.push(`${colName} = ${Number(body[bodyKey])}`);
-      }
-    }
-    // ExternalUserID is numeric in ADS
-    if (body.externalId !== undefined) {
-      const extNum = (!isNaN(Number(body.externalId)) && body.externalId !== '')
-        ? Number(body.externalId) : 0;
-      cardSets.push(`ExternalUserID = ${extNum}`);
-    }
-    if (body.startDate !== undefined) {
-      cardSets.push(`StartDate = ${escStr(body.startDate)}`);
-    }
-    if (body.endDate !== undefined) {
-      cardSets.push(`EndDate = ${escStr(body.endDate)}, UsingEndDate = 1`);
-    }
-    if (body.cardType !== undefined) {
-      const ctId = await resolveCardType(body.cardType);
-      cardSets.push(`FkCardType = ${ctId}`);
-    }
-
-    // --- ItemCard table ---
-    const itemSets = [];
-    if (body.accessLevel !== undefined) {
-      const alId = await resolveAccessLevel(body.accessLevel);
-      itemSets.push(`FkICDataAccessLevel = ${alId}`);
-    }
-    if (body.accessException !== undefined) {
-      const aeId = body.accessException
-        ? await resolveAccessLevel(body.accessException)
-        : 0;
-      itemSets.push(`FkICDataAccessLevel1 = ${aeId}`);
-      itemSets.push(`DoorExceptionMode = ${aeId ? 1 : 0}`);
-    }
-    if (body.accessExceptionExpiry !== undefined) {
-      itemSets.push(`ICDataExpiration1 = ${escStr(body.accessExceptionExpiry)}`);
-    }
-
-    if (!cardSets.length && !itemSets.length) {
-      return res.status(400).json({ error: 'No recognised fields to update' });
-    }
-
-    if (cardSets.length) {
-      await execute(`UPDATE Card SET ${cardSets.join(', ')} WHERE PkData = ${id}`);
-    }
-    if (itemSets.length) {
-      await execute(`UPDATE ItemCard SET ${itemSets.join(', ')} WHERE FkDataCard = ${id}`);
-    }
-
-    res.json({ ok: true, id, updated: cardSets.length + itemSets.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.put('/:id', (req, res) => {
+  res.status(403).json({
+    error: 'Updating users via the API is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please update users through the EntraPass workstation instead.',
+  });
 });
 
 module.exports = router;

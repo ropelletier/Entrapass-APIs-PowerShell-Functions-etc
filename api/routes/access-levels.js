@@ -11,7 +11,7 @@
 'use strict';
 
 const router = require('express').Router();
-const { query, esc, escStr } = require('../db');
+const { query, execute, esc, escStr } = require('../db');
 const ss = require('../smartservice');
 
 // ---------------------------------------------------------------------------

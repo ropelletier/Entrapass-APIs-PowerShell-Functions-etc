@@ -15,9 +15,9 @@
 'use strict';
 
 const router = require('express').Router();
-const { query, execute, esc, escStr } = require('../db');
+const { query, esc, escStr } = require('../db');
 const { queryDay, enrichEvents } = require('./events');
-const { mapOutbound, mapInbound } = require('../field-map');
+const { mapOutbound } = require('../field-map');
 
 // ---------------------------------------------------------------------------
 // Base SELECT — joins Card → CardNumber → ItemCard → AccessLevel

@@ -8,9 +8,9 @@
  * GET  /api/v1/users?access_level=Staff   filter by access level (LIKE)
  * GET  /api/v1/users/:id                  single user by CardholderID
  * GET  /api/v1/users/:id/cards            all cards assigned to a user
+ * POST /api/v1/users                      create new cardholder (via SmartService)
  *
- * DISABLED (direct ADS writes bypass SmartService and cause sync issues):
- * POST /api/v1/users                      create new cardholder
+ * DISABLED (PUT Cards with UserName creates duplicate records):
  * PUT  /api/v1/users/:id                  update cardholder fields
  */
 
@@ -20,6 +20,7 @@ const router = require('express').Router();
 const { query, esc, escStr } = require('../db');
 const { queryDay, enrichEvents } = require('./events');
 const { mapOutbound } = require('../field-map');
+const ss = require('../smartservice');
 
 // ---------------------------------------------------------------------------
 // Base SELECT — joins Card → CardNumber → ItemCard → AccessLevel

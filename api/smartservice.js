@@ -37,9 +37,25 @@ async function getSessionKey() {
 }
 
 /**
- * Call the PowerShell bridge to get a new session key.
+ * Log out the current session to free the SmartService connection slot.
+ * Safe to call even if no session exists.
  */
-function refreshSession() {
+async function logout() {
+  if (!cachedSession) return;
+  const oldKey = cachedSession.key;
+  cachedSession = null;
+  try {
+    await ssRequest('GET', 'Logout', { query: { sdKey: oldKey } });
+    console.log(`SmartService session logged out: ${oldKey.substring(0, 8)}...`);
+  } catch (_) { /* best-effort — don't block on logout failures */ }
+}
+
+/**
+ * Call the PowerShell bridge to get a new session key.
+ * Logs out any existing session first to avoid exhausting SmartService's connection limit.
+ */
+async function refreshSession() {
+  await logout();
   return new Promise((resolve, reject) => {
     execFile(
       'powershell',

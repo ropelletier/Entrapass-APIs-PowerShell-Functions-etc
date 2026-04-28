@@ -13,8 +13,9 @@
 'use strict';
 
 const router = require('express').Router();
-const { query, execute, esc, escStr } = require('../db');
-const { notifyGateway } = require('../card-helpers');
+const { query, esc, escStr } = require('../db');
+
+const ADS_WRITE_ERROR = 'This operation is disabled. Direct ADS writes bypass SmartService and cause sync issues. Please make this change through the EntraPass workstation instead.';
 
 // ---------------------------------------------------------------------------
 // Helper: get total ItemCard row count for a cardholder

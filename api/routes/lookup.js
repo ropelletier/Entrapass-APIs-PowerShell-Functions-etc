@@ -5,19 +5,15 @@
  * POST   /api/v1/access-levels          create access level (via SmartService)
  * PUT    /api/v1/access-levels/:id      update access level (via SmartService)
  * GET    /api/v1/card-types             all card types
- *
- * DISABLED (no SmartService endpoint):
- * POST   /api/v1/card-types             create card type
- * PUT    /api/v1/card-types/:id         update card type
+ * POST   /api/v1/card-types             create card type (via ADS)
+ * PUT    /api/v1/card-types/:id         update card type (via ADS)
  */
 
 'use strict';
 
 const router = require('express').Router();
-const { query } = require('../db');
+const { query, execute, esc, escStr } = require('../db');
 const ss = require('../smartservice');
-
-const NO_SS_ENDPOINT = 'This operation is disabled. No SmartService endpoint exists for card types. Please make this change through the EntraPass workstation instead.';
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/access-levels

@@ -40,77 +40,17 @@ router.get('/access-levels', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/access-levels — create a new access level
-//
-// Required: { name }
-// Optional: { description, allValid }
-//
-// allValid=true  → access to all doors at all times (no schedule config needed)
-// allValid=false → access level with no doors; configure doors in EntraPass UI
+// POST /api/v1/access-levels — DISABLED
 // ---------------------------------------------------------------------------
-router.post('/access-levels', async (req, res) => {
-  try {
-    const { name, description, allValid = false } = req.body;
-    if (!name) return res.status(400).json({ error: 'name is required' });
-
-    // Derive PkData and Info1 (sequential index) from existing records
-    const meta = await query(
-      'SELECT MAX(PkData) AS MaxPk, MAX(Info1) AS MaxInfo, MIN(FkObject) AS FkObj, MIN(FkParent) AS FkPar, MAX(Cluster) AS Clus FROM AccessLevel'
-    );
-    const m     = meta[0] || {};
-    const pkData = (parseInt(m.MaxPk || '0', 10) || 0) + 1;
-    const info1  = (parseInt(m.MaxInfo || '0', 10) || 0) + 1;
-    const fkObj  = parseInt(m.FkObj || '1', 10);
-    const fkPar  = parseInt(m.FkPar || '68', 10);
-    const clus   = parseInt(m.Clus || '67', 10);
-    const desc   = description || name;
-    const allV   = allValid ? 1 : 0;
-
-    await execute(
-      `INSERT INTO AccessLevel
-         (PkData, FkObject, FkParent, MasterAccount, Account, Cluster,
-          NTM, GSI, Site, Info1, Info2, Info3, Info4,
-          State, Description1, Description2, NoneValid, AllValid, ItemCount, Type)
-       VALUES
-         (${pkData}, ${fkObj}, ${fkPar}, 0, 0, ${clus},
-          0, 0, 0, ${info1}, 0, 0, 0,
-          1, ${escStr(name)}, ${escStr(desc)}, 0, ${allV}, 0, 201)`
-    );
-
-    res.status(201).json({ id: pkData, name, description: desc, allValid: !!allValid });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.post('/access-levels', (req, res) => {
+  res.status(403).json({ error: ADS_WRITE_ERROR });
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/access-levels/:id — update an access level
-//
-// Updatable: name, description, allValid, noneValid
+// PUT /api/v1/access-levels/:id — DISABLED
 // ---------------------------------------------------------------------------
-router.put('/access-levels/:id', async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
-
-    const fieldMap = {
-      name:        'Description1',
-      description: 'Description2',
-    };
-    const sets = [];
-    for (const [bodyKey, colName] of Object.entries(fieldMap)) {
-      if (req.body[bodyKey] !== undefined) sets.push(`${colName} = ${escStr(req.body[bodyKey])}`);
-    }
-    if (req.body.allValid  !== undefined) sets.push(`AllValid  = ${req.body.allValid  ? 1 : 0}`);
-    if (req.body.noneValid !== undefined) sets.push(`NoneValid = ${req.body.noneValid ? 1 : 0}`);
-
-    if (!sets.length) return res.status(400).json({ error: 'No recognised fields to update' });
-
-    await execute(`UPDATE AccessLevel SET ${sets.join(', ')} WHERE PkData = ${id}`);
-    res.json({ ok: true, id, updated: sets.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.put('/access-levels/:id', (req, res) => {
+  res.status(403).json({ error: ADS_WRITE_ERROR });
 });
 
 // ---------------------------------------------------------------------------

@@ -48,6 +48,7 @@ app.use('/api/v1/cards',        requireApiKey, require('./routes/cards'));
 app.use('/api/v1/events',       requireApiKey, require('./routes/events'));
 app.use('/api/v1/doors',        requireApiKey, require('./routes/doors'));
 app.use('/api/v1/admin',        requireApiKey, require('./routes/admin'));
+app.use('/api/v1/sync',        requireApiKey, require('./routes/sync'));
 
 // ---------------------------------------------------------------------------
 // 404 catch-all

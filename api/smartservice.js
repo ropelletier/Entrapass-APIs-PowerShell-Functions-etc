@@ -477,6 +477,8 @@ module.exports = {
   // Access level CRUD
   createAccessLevel,
   updateAccessLevel,
+  // Access level validation
+  isValidAccessLevel,
   // Constants
   GATEWAY_SITE_ID,
   DEFAULT_CARD_TYPE,

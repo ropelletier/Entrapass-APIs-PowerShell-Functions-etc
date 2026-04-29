@@ -310,11 +310,11 @@ router.put('/:id', async (req, res) => {
     const ssFields = {};
     if (email !== undefined)     { ssFields.Email = email;           updated++; }
     if (cardType !== undefined)  { ssFields.CardType = cardType;     updated++; }
-    if (cardInfo1 !== undefined) { ssFields.CardInfo1 = cardInfo1;   updated++; }
-    if (cardInfo2 !== undefined) { ssFields.CardInfo2 = cardInfo2;   updated++; }
-    if (cardInfo3 !== undefined) { ssFields.CardInfo3 = cardInfo3;   updated++; }
-    if (cardInfo4 !== undefined) { ssFields.CardInfo4 = cardInfo4;   updated++; }
-    if (cardInfo5 !== undefined) { ssFields.CardInfo5 = cardInfo5;   updated++; }
+    // CardInfo1-40
+    for (let i = 1; i <= 40; i++) {
+      const key = `cardInfo${i}`;
+      if (body[key] !== undefined) { ssFields[`CardInfo${i}`] = body[key]; updated++; }
+    }
 
     if (!updated) {
       return res.status(400).json({ error: 'No recognised fields to update' });

@@ -228,10 +228,12 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Validate access level is recognized by SmartService (ADS has legacy levels that don't work)
+    // Validate access level is active (State=1). Legacy levels (State=2) are not recognized by SmartService.
     if (accessLevelId) {
-      const valid = await ss.isValidAccessLevel(accessLevelId);
-      if (!valid) return res.status(400).json({ error: `Access level ${accessLevelId} (${accessLevelName}) exists in the database but is not recognized by SmartService. It may be a legacy entry. Use GET /access-levels to see available levels and check the SmartService column.` });
+      const stateRows = await query(`SELECT State FROM AccessLevel WHERE PkData = ${esc(accessLevelId)}`);
+      if (stateRows.length && stateRows[0].State !== '1') {
+        return res.status(400).json({ error: `Access level ${accessLevelId} (${accessLevelName}) is inactive (legacy). Only active access levels can be assigned. Use GET /access-levels and look for "active": true.` });
+      }
     }
 
     // Build Card XML with flat fields + optional access level fragment

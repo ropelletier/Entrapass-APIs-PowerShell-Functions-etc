@@ -149,7 +149,7 @@ async function getChangedCardholders(adsLiteral) {
   const rows = await query(`
     SELECT c.PkData AS id, c.UserName AS name, c.State AS state, c.Email AS email,
       c.CreationDate AS createdAt, c.CardNumberCount AS cardCount,
-      c.CardInfo1, c.CardInfo2, c.CardInfo3, c.CardInfo4, c.CardInfo5,
+      c.CardInfo1, c.CardInfo2, c.CardInfo3, c.CardInfo4, c.CardInfo5, c.CardInfo20 AS UUID,
       c.FkCardType AS cardTypeId, ct.Description1 AS cardTypeName,
       ic.FkICDataAccessLevel AS accessLevelId, al.Description1 AS accessLevelName,
       c.TransactionTag

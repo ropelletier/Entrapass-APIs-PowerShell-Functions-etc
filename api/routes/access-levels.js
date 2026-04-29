@@ -76,6 +76,12 @@ router.put('/:id/access-level', async (req, res) => {
       accessLevelName = alRows[0].Description1;
     }
 
+    // Validate access level is recognized by SmartService
+    if (!clearing) {
+      const valid = await ss.isValidAccessLevel(fkLevel);
+      if (!valid) return res.status(400).json({ error: `Access level ${fkLevel} (${accessLevelName}) exists in the database but is not recognized by SmartService. It may be a legacy entry.` });
+    }
+
     // Build Card XML with ONLY ID + CardAccessLevels (no UserName — avoids duplicate bug)
     const fragment = ss.buildAccessLevelsFragment(clearing ? 0 : fkLevel);
     await ss.updateCardFull(pkCard, {}, [fragment]);

@@ -92,9 +92,15 @@ router.put('/access-levels/:id', async (req, res) => {
 router.get('/card-types', async (req, res) => {
   try {
     const rows = await query(
-      'SELECT PkData AS id, Description1 AS name, Description2 AS description FROM CardType ORDER BY Description1'
+      'SELECT PkData AS id, Description1 AS name, Description2 AS description, State FROM CardType ORDER BY Description1'
     );
-    res.json({ count: rows.length, cardTypes: rows });
+    const cardTypes = rows.map(r => ({
+      id:          r.id,
+      name:        r.name,
+      description: r.description || '',
+      active:      r.State === '1',
+    }));
+    res.json({ count: cardTypes.length, cardTypes });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -228,6 +228,12 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // Validate access level is recognized by SmartService (ADS has legacy levels that don't work)
+    if (accessLevelId) {
+      const valid = await ss.isValidAccessLevel(accessLevelId);
+      if (!valid) return res.status(400).json({ error: `Access level ${accessLevelId} (${accessLevelName}) exists in the database but is not recognized by SmartService. It may be a legacy entry. Use GET /access-levels to see available levels and check the SmartService column.` });
+    }
+
     // Build Card XML with flat fields + optional access level fragment
     const flatFields = {
       UserName: name,

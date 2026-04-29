@@ -288,7 +288,8 @@ router.put('/:id', async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
 
-    const { name, state, email, cardType, cardInfo1, cardInfo2, cardInfo3, cardInfo4, cardInfo5 } = req.body;
+    const body = req.body;
+    const { name, state, email, cardType } = body;
 
     // Verify cardholder exists
     const existing = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(id)}`);

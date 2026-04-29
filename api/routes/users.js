@@ -308,13 +308,14 @@ router.put('/:id', async (req, res) => {
 
     // All other fields go through SmartService PUT
     const ssFields = {};
-    if (email !== undefined)     { ssFields.Email = email;           updated++; }
-    if (cardType !== undefined)  { ssFields.CardType = cardType;     updated++; }
-    // CardInfo1-40
-    for (let i = 1; i <= 40; i++) {
-      const key = `cardInfo${i}`;
-      if (body[key] !== undefined) { ssFields[`CardInfo${i}`] = body[key]; updated++; }
-    }
+    if (email !== undefined)        { ssFields.Email = email;           updated++; }
+    if (cardType !== undefined)     { ssFields.CardType = cardType;     updated++; }
+    if (body.cardInfo1 !== undefined) { ssFields.CardInfo1 = body.cardInfo1; updated++; }
+    if (body.cardInfo2 !== undefined) { ssFields.CardInfo2 = body.cardInfo2; updated++; }
+    if (body.cardInfo3 !== undefined) { ssFields.CardInfo3 = body.cardInfo3; updated++; }
+    if (body.cardInfo4 !== undefined) { ssFields.CardInfo4 = body.cardInfo4; updated++; }
+    if (body.cardInfo5 !== undefined) { ssFields.CardInfo5 = body.cardInfo5; updated++; }
+    if (body.uuid !== undefined)      { ssFields.CardInfo20 = body.uuid;     updated++; }
 
     if (!updated) {
       return res.status(400).json({ error: 'No recognised fields to update' });

@@ -51,7 +51,7 @@ SELECT
   al.Description1         AS AccessLevel
 FROM Card c
 LEFT OUTER JOIN CardNumber  n  ON c.PkData = n.PkCard
-LEFT OUTER JOIN ItemCard    ic ON c.PkData = ic.FkDataCard
+LEFT OUTER JOIN ItemCard    ic ON c.PkData = ic.FkDataCard AND ic.ObjectCard = 38
 LEFT OUTER JOIN AccessLevel al ON ic.FkICDataAccessLevel = al.PkData
 `;
 

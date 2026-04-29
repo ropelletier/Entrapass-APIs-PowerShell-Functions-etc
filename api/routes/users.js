@@ -87,7 +87,11 @@ function groupUsers(rows) {
           cardInfo3: r.CardInfo3 || '', cardInfo4: r.CardInfo4 || '',
           cardInfo5: r.CardInfo5 || '',
         }),
-        cardCount: parseInt(r.CardCount, 10) || 0,
+        cardCount:       parseInt(r.CardCount, 10) || 0,
+        cardTypeId:      r.CardTypeId ? parseInt(r.CardTypeId, 10) : null,
+        cardTypeName:    r.CardTypeName || null,
+        accessLevelId:   r.AccessLevelId ? parseInt(r.AccessLevelId, 10) : null,
+        accessLevelName: r.AccessLevel || null,
         cards: [],
       });
     }

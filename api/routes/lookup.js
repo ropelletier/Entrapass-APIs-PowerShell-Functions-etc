@@ -24,21 +24,14 @@ router.get('/access-levels', async (req, res) => {
       'SELECT PkData AS id, Description1 AS name, Description2 AS description, AllValid AS allValid, NoneValid AS noneValid FROM AccessLevel ORDER BY Description1'
     );
 
-    // Check which levels SmartService recognizes (for the smartServiceValid flag)
-    let validSet = null;
-    try { validSet = await ss.getValidAccessLevels(); } catch (_) { /* SmartService down — skip flag */ }
-
-    const levels = rows.map(r => {
-      const obj = {
-        id:          r.id,
-        name:        r.name,
-        description: r.description || '',
-        allValid:    r.allValid === '1' || r.allValid === 'True',
-        noneValid:   r.noneValid === '1' || r.noneValid === 'True',
-      };
-      if (validSet) obj.smartServiceValid = validSet.has(parseInt(r.id, 10));
-      return obj;
-    });
+    const levels = rows.map(r => ({
+      id:          r.id,
+      name:        r.name,
+      description: r.description || '',
+      allValid:    r.allValid === '1' || r.allValid === 'True',
+      noneValid:   r.noneValid === '1' || r.noneValid === 'True',
+      active:      r.State === '1',
+    }));
     res.json({ count: levels.length, accessLevels: levels });
   } catch (err) {
     res.status(500).json({ error: err.message });

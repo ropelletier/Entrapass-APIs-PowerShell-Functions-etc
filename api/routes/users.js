@@ -314,8 +314,8 @@ router.put('/:id', async (req, res) => {
     if (Object.keys(ssFields).length) {
       // PUT to SmartService with non-name fields
       await ss.updateCard(id, ssFields);
-    } else if (name !== undefined) {
-      // Name-only change: send a no-op PUT to flush SmartService cache
+    } else if (adsSets.length) {
+      // ADS-only change: send a no-op PUT to flush SmartService cache
       await ss.updateCardFull(id, {}, []);
     }
 

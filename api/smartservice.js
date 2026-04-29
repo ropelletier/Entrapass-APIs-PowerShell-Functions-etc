@@ -421,6 +421,39 @@ async function updateAccessLevel(id, name, description) {
   return true;
 }
 
+/**
+ * Get the set of access level IDs that SmartService knows about.
+ * ADS may have legacy levels that SmartService doesn't recognize.
+ * @returns {Promise<Set<number>>}
+ */
+let _validAccessLevels = null;
+let _validAccessLevelsAt = 0;
+const AL_CACHE_TTL = 10 * 60 * 1000; // 10 min
+
+async function getValidAccessLevels() {
+  if (_validAccessLevels && (Date.now() - _validAccessLevelsAt) < AL_CACHE_TTL) {
+    return _validAccessLevels;
+  }
+  const res = await ssCall('GET', 'AccessLevels');
+  const ids = new Set();
+  const re = /<ID>(\d+)<\/ID>/g;
+  let m;
+  while ((m = re.exec(res.body)) !== null) {
+    ids.add(parseInt(m[1], 10));
+  }
+  _validAccessLevels = ids;
+  _validAccessLevelsAt = Date.now();
+  return ids;
+}
+
+/**
+ * Check if an access level ID is recognized by SmartService.
+ */
+async function isValidAccessLevel(id) {
+  const valid = await getValidAccessLevels();
+  return valid.has(id);
+}
+
 module.exports = {
   // Session
   getSessionKey,

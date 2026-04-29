@@ -21,7 +21,7 @@ const ss = require('../smartservice');
 router.get('/access-levels', async (req, res) => {
   try {
     const rows = await query(
-      'SELECT PkData AS id, Description1 AS name, Description2 AS description, AllValid AS allValid, NoneValid AS noneValid FROM AccessLevel ORDER BY Description1'
+      'SELECT PkData AS id, Description1 AS name, Description2 AS description, AllValid AS allValid, NoneValid AS noneValid, State FROM AccessLevel ORDER BY Description1'
     );
 
     const levels = rows.map(r => ({

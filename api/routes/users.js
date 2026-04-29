@@ -41,6 +41,7 @@ SELECT
   c.CardInfo3             AS CardInfo3,
   c.CardInfo4             AS CardInfo4,
   c.CardInfo5             AS CardInfo5,
+  c.CardInfo20            AS UUID,
   c.CardNumberCount       AS CardCount,
   c.FkCardType            AS CardTypeId,
   ct.Description1         AS CardTypeName,

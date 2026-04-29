@@ -42,17 +42,21 @@ SELECT
   c.CardInfo4             AS CardInfo4,
   c.CardInfo5             AS CardInfo5,
   c.CardNumberCount       AS CardCount,
+  c.FkCardType            AS CardTypeId,
+  ct.Description1         AS CardTypeName,
   n.CardNumberFormatted   AS CardNumber,
   n.CardNumber            AS CardNumberRaw,
   n.LostStolen            AS CardLostStolen,
   n.Deactivated           AS CardDeactivated,
   n.UseEndDate            AS CardHasExpiry,
   n.EndDate               AS CardEndDate,
+  ic.FkICDataAccessLevel  AS AccessLevelId,
   al.Description1         AS AccessLevel
 FROM Card c
 LEFT OUTER JOIN CardNumber  n  ON c.PkData = n.PkCard
 LEFT OUTER JOIN ItemCard    ic ON c.PkData = ic.FkDataCard AND ic.ObjectCard = 38
 LEFT OUTER JOIN AccessLevel al ON ic.FkICDataAccessLevel = al.PkData
+LEFT OUTER JOIN CardType    ct ON c.FkCardType = ct.PkData
 `;
 
 const STATE_LABELS = { '1': 'Active', '2': 'Inactive', '0': 'Lost/Stolen' };

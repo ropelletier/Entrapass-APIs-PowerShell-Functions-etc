@@ -269,10 +269,10 @@ router.post('/', async (req, res) => {
 // ---------------------------------------------------------------------------
 // PUT /api/v1/users/:id — update cardholder fields
 //
-// Updatable: name, email, cardType, cardInfo1-5
+// Updatable: name, state, email, cardType, cardInfo1-5
 //
-// Name changes go through ADS (SmartService PUT with UserName creates
-// duplicates), then a no-op PUT flushes SmartService's cache.
+// Name and state changes go through ADS (SmartService doesn't support these
+// as in-place updates), then a no-op PUT flushes SmartService's cache.
 // All other fields go through SmartService PUT Cards/{id} directly.
 // ---------------------------------------------------------------------------
 router.put('/:id', async (req, res) => {
@@ -280,18 +280,21 @@ router.put('/:id', async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
 
-    const { name, email, cardType, cardInfo1, cardInfo2, cardInfo3, cardInfo4, cardInfo5 } = req.body;
+    const { name, state, email, cardType, cardInfo1, cardInfo2, cardInfo3, cardInfo4, cardInfo5 } = req.body;
 
     // Verify cardholder exists
     const existing = await query(`SELECT PkData FROM Card WHERE PkData = ${esc(id)}`);
     if (!existing.length) return res.status(404).json({ error: 'User not found' });
 
     let updated = 0;
+    const adsSets = [];
 
-    // Name changes must go through ADS (SmartService duplicates on UserName change)
-    if (name !== undefined) {
-      await execute(`UPDATE Card SET UserName = ${escStr(name)} WHERE PkData = ${esc(id)}`);
-      updated++;
+    // Name and state changes must go through ADS
+    if (name !== undefined)  { adsSets.push(`UserName = ${escStr(name)}`); updated++; }
+    if (state !== undefined) { adsSets.push(`State = ${esc(state)}`);      updated++; }
+
+    if (adsSets.length) {
+      await execute(`UPDATE Card SET ${adsSets.join(', ')} WHERE PkData = ${esc(id)}`);
     }
 
     // All other fields go through SmartService PUT

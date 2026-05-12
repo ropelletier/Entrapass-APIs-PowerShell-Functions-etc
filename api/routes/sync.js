@@ -183,7 +183,7 @@ async function getChangedCardholders(adsLiteral) {
     cardInfo4:       r.CardInfo4 || '',
     cardInfo5:       r.CardInfo5 || '',
     uuid:            r.UUID || '',
-    gmKey:           r.GMKey || '',
+    physicalKeys:    r.PhysicalKeys || '',
     cesKey:          r.CESKey || '',
     cmsKey:          r.CMSKey || '',
     sesKey:          r.SESKey || '',

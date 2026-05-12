@@ -41,7 +41,7 @@ SELECT
   c.CardInfo3             AS CardInfo3,
   c.CardInfo4             AS CardInfo4,
   c.CardInfo5             AS CardInfo5,
-  c.CardInfo3             AS GMKey,
+  c.CardInfo3             AS PhysicalKeys,
   c.CardInfo4             AS CESKey,
   c.CardInfo8             AS CMSKey,
   c.CardInfo9             AS SESKey,

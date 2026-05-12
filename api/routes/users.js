@@ -331,10 +331,21 @@ router.put('/:id', async (req, res) => {
     if (body.cardInfo4 !== undefined) { ssFields.CardInfo4 = body.cardInfo4; updated++; }
     if (body.cardInfo5 !== undefined) { ssFields.CardInfo5 = body.cardInfo5; updated++; }
     if (body.uuid !== undefined)      { ssFields.CardInfo20 = body.uuid;     updated++; }
-    if (body.physicalKeys !== undefined) { ssFields.CardInfo3 = body.physicalKeys; updated++; }
-    if (body.cesKey !== undefined)    { ssFields.CardInfo4 = body.cesKey;    updated++; }
-    if (body.cmsKey !== undefined)    { ssFields.CardInfo8 = body.cmsKey;    updated++; }
-    if (body.sesKey !== undefined)    { ssFields.CardInfo9 = body.sesKey;    updated++; }
+    // Key 1-6 in workstation order map to: CardInfo3, 8, 4, 9, 5, 10
+    const KEY_COLS = ['CardInfo3', 'CardInfo8', 'CardInfo4', 'CardInfo9', 'CardInfo5', 'CardInfo10'];
+    if (Array.isArray(body.keys)) {
+      // Array replaces all 6 slots in order; missing slots are cleared
+      for (let i = 0; i < 6; i++) {
+        ssFields[KEY_COLS[i]] = body.keys[i] !== undefined ? body.keys[i] : '';
+      }
+      updated++;
+    }
+    for (let i = 1; i <= 6; i++) {
+      if (body[`key${i}`] !== undefined) {
+        ssFields[KEY_COLS[i - 1]] = body[`key${i}`];
+        updated++;
+      }
+    }
 
     if (!updated) {
       return res.status(400).json({ error: 'No recognised fields to update' });

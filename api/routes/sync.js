@@ -183,6 +183,10 @@ async function getChangedCardholders(adsLiteral) {
     cardInfo4:       r.CardInfo4 || '',
     cardInfo5:       r.CardInfo5 || '',
     uuid:            r.UUID || '',
+    gmKey:           r.GMKey || '',
+    cesKey:          r.CESKey || '',
+    cmsKey:          r.CMSKey || '',
+    sesKey:          r.SESKey || '',
     changedAt:       tagToISO(r.TransactionTag),
     deleted:         false,
   }));

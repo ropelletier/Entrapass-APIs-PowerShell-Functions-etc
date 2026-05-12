@@ -150,7 +150,7 @@ async function getChangedCardholders(adsLiteral) {
     SELECT c.PkData AS id, c.UserName AS name, c.State AS state, c.Email AS email,
       c.CreationDate AS createdAt, c.CardNumberCount AS cardCount,
       c.CardInfo1, c.CardInfo2, c.CardInfo3, c.CardInfo4, c.CardInfo5,
-      c.CardInfo3 AS GMKey, c.CardInfo4 AS CESKey, c.CardInfo8 AS CMSKey, c.CardInfo9 AS SESKey,
+      c.CardInfo3 AS PhysicalKeys, c.CardInfo4 AS CESKey, c.CardInfo8 AS CMSKey, c.CardInfo9 AS SESKey,
       c.CardInfo20 AS UUID,
       c.FkCardType AS cardTypeId, ct.Description1 AS cardTypeName,
       ic.FkICDataAccessLevel AS accessLevelId, al.Description1 AS accessLevelName,

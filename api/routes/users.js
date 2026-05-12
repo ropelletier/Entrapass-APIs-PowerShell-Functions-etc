@@ -94,7 +94,7 @@ function groupUsers(rows) {
         }),
         cardCount:       parseInt(r.CardCount, 10) || 0,
         uuid:            r.UUID || '',
-        gmKey:           r.GMKey || '',
+        physicalKeys:    r.PhysicalKeys || '',
         cesKey:          r.CESKey || '',
         cmsKey:          r.CMSKey || '',
         sesKey:          r.SESKey || '',

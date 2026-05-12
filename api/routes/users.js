@@ -326,6 +326,10 @@ router.put('/:id', async (req, res) => {
     if (body.cardInfo4 !== undefined) { ssFields.CardInfo4 = body.cardInfo4; updated++; }
     if (body.cardInfo5 !== undefined) { ssFields.CardInfo5 = body.cardInfo5; updated++; }
     if (body.uuid !== undefined)      { ssFields.CardInfo20 = body.uuid;     updated++; }
+    if (body.gmKey !== undefined)     { ssFields.CardInfo3 = body.gmKey;     updated++; }
+    if (body.cesKey !== undefined)    { ssFields.CardInfo4 = body.cesKey;    updated++; }
+    if (body.cmsKey !== undefined)    { ssFields.CardInfo8 = body.cmsKey;    updated++; }
+    if (body.sesKey !== undefined)    { ssFields.CardInfo9 = body.sesKey;    updated++; }
 
     if (!updated) {
       return res.status(400).json({ error: 'No recognised fields to update' });

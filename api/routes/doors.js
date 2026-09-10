@@ -181,6 +181,152 @@ router.get('/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/doors/:id/config
+//
+// Full door configuration — wiring assignments (contacts, REX, relays),
+// unlock timing, lock mode, and behaviour flags. Sourced from SmartService
+// `GET Doors/{id}?shortReturn=0` and translated to a stable JSON shape.
+//
+// Intended for hardware diagnostics — comparing sibling doors to isolate
+// wiring issues, spotting missing contact / relay assignments, and checking
+// unlock/relock timing without opening the workstation GUI.
+// ---------------------------------------------------------------------------
+router.get('/:id/config', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'id must be a number' });
+
+    // Basic row for name / current mode
+    const doorRow = await lookupDoor(id, res);
+    if (!doorRow) return;
+
+    // Pull the full XML from SmartService
+    const ssRes = await ss.ssCall('GET', `Doors/${id}`, { query: { shortReturn: '0' } });
+    if (ssRes.status !== 200) {
+      return res.status(500).json({ error: `SmartService GET Doors/${id} returned ${ssRes.status}` });
+    }
+    const xml = ssRes.body;
+
+    // Helpers
+    const strOf = (tag) => {
+      const m = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+      return m ? m[1] : null;
+    };
+    const intOf = (tag) => { const v = strOf(tag); return v === null ? null : parseInt(v, 10); };
+    const boolOf = (tag) => { const v = strOf(tag); return v === null ? null : (v === 'True'); };
+
+    // Resolve any FK values that point at hardware components. Prefer ADS
+    // lookups (fast, local, no SmartService cost).
+    const fks = {
+      rexContact:            intOf('FKREXContact')            || 0,
+      secondaryRexContact:   intOf('FKSecondaryREXContact')   || 0,
+      doorContact:           intOf('FKDataDoorContact')       || 0,
+      interlockContact:      intOf('FKInterlockContact')      || 0,
+      lockingRelay:          intOf('FkRelayLockingDevice')    || 0,
+      accessGrantedRelay:    intOf('FKRelayAccessGranted')    || 0,
+      accessDeniedRelay:     intOf('FKRelayAccessDenied')     || 0,
+      doorForcedRelay:       intOf('FKRelayDoorForced')       || 0,
+      doorOpenTooLongRelay:  intOf('FKRelayDoorOpenTooLong')  || 0,
+      alarmRelay:            intOf('FKAlarmRelay')            || 0,
+    };
+
+    const nameOf = async (table, id) => {
+      if (!id) return null;
+      const rows = await query(`SELECT Description1 FROM ${table} WHERE PkData = ${esc(id)}`);
+      return rows.length ? rows[0].Description1 : null;
+    };
+
+    const [rexContactName, secondaryRexContactName, doorContactName, interlockContactName,
+           lockingRelayName, accessGrantedRelayName, accessDeniedRelayName,
+           doorForcedRelayName, doorOpenTooLongRelayName, alarmRelayName] = await Promise.all([
+      nameOf('Input',  fks.rexContact),
+      nameOf('Input',  fks.secondaryRexContact),
+      nameOf('Input',  fks.doorContact),
+      nameOf('Input',  fks.interlockContact),
+      nameOf('Relay',  fks.lockingRelay),
+      nameOf('Relay',  fks.accessGrantedRelay),
+      nameOf('Relay',  fks.accessDeniedRelay),
+      nameOf('Relay',  fks.doorForcedRelay),
+      nameOf('Relay',  fks.doorOpenTooLongRelay),
+      nameOf('Relay',  fks.alarmRelay),
+    ]);
+
+    const scheduleName = async (id) => {
+      if (!id) return null;
+      const rows = await query(`SELECT Description1 FROM Schedule WHERE PkData = ${esc(id)}`);
+      return rows.length ? rows[0].Description1 : null;
+    };
+
+    const rexScheduleId       = intOf('FKREXSchedule')          || 0;
+    const unlockScheduleId    = intOf('FKUnlockSchedule')       || 0;
+    const doorContactSchedId  = intOf('FKDoorContactSchedule')  || 0;
+
+    const [rexScheduleN, unlockScheduleN, doorContactSchedN] = await Promise.all([
+      scheduleName(rexScheduleId),
+      scheduleName(unlockScheduleId),
+      scheduleName(doorContactSchedId),
+    ]);
+
+    res.json({
+      id,
+      name:            doorRow.name,
+      mode:            MODE_LABEL[parseInt(doorRow.mode, 10)] || String(doorRow.mode),
+      hardware: {
+        ktType:      strOf('KTType'),
+        doorLockMode: strOf('DoorLockMode'),
+      },
+      timing: {
+        unlockTimeSec:            intOf('UnlockTime'),
+        openTimeSec:              intOf('OpenTime'),
+        extendedUnlockTimeSec:    intOf('ExtendedUnlockTime'),
+        extendedOpenTimeSec:      intOf('ExtendedOpenTime'),
+        extendedDelayBeforeLock:  intOf('ExtendedDelayBeforeLock'),
+        unlockGracePeriodSec:     intOf('UnlockGracePeriod'),
+      },
+      contacts: {
+        doorContact:         { id: fks.doorContact,         name: doorContactName,           schedule: { id: doorContactSchedId, name: doorContactSchedN } },
+        rexContact:          { id: fks.rexContact,          name: rexContactName,            schedule: { id: rexScheduleId,      name: rexScheduleN      } },
+        secondaryRexContact: { id: fks.secondaryRexContact, name: secondaryRexContactName },
+        interlockContact:    { id: fks.interlockContact,    name: interlockContactName },
+      },
+      relays: {
+        lockingDevice:      { id: fks.lockingRelay,         name: lockingRelayName },
+        accessGranted:      { id: fks.accessGrantedRelay,   name: accessGrantedRelayName },
+        accessDenied:       { id: fks.accessDeniedRelay,    name: accessDeniedRelayName },
+        doorForced:         { id: fks.doorForcedRelay,      name: doorForcedRelayName },
+        doorOpenTooLong:    { id: fks.doorOpenTooLongRelay, name: doorOpenTooLongRelayName },
+        alarm:              { id: fks.alarmRelay,           name: alarmRelayName },
+      },
+      behaviour: {
+        onAccess:                boolOf('OnAccess'),
+        onRex:                   boolOf('OnREX'),
+        unlockOnRex:             boolOf('UnlockOnREX'),
+        secondaryUnlockOnRex:    boolOf('SecondaryUnlockOnREX'),
+        rexRestartPrimary:       boolOf('REXRestartPrimary'),
+        rexRestartSecondary:     boolOf('REXRestartSecondary'),
+        unlockOnAccessDoorOpened: boolOf('UnlockOnAccessDoorOpened'),
+        unlockScheduleAccessGranted: boolOf('UnlockScheduleAccessGranted'),
+        unlockDeviceNotSupervised: boolOf('UnlockDeviceNotSupervised'),
+        doorOpenReading:         boolOf('DoorOpenReading'),
+        doorUnlockReading:       boolOf('DoorUnlockReading'),
+      },
+      alarms: {
+        alarmOnDOTL:              boolOf('AlarmOnDOTL'),
+        alarmOnDOTLDelaySec:      intOf('AlarmOnDOTLDelay'),
+      },
+      schedules: {
+        rex:                     { id: rexScheduleId,     name: rexScheduleN },
+        unlock:                  { id: unlockScheduleId,  name: unlockScheduleN },
+        doorContact:             { id: doorContactSchedId, name: doorContactSchedN },
+      },
+    });
+  } catch (err) {
+    console.error('GET /doors/:id/config error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/v1/doors/:id/unlock — momentary unlock for N seconds
 // ---------------------------------------------------------------------------
 async function handleUnlock(req, res) {

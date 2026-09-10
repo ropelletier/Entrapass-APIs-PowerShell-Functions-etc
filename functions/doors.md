@@ -53,6 +53,29 @@ Single door by PkData.
 
 ---
 
+### GET /api/v1/doors/:id/config
+
+Full door configuration from SmartService (`Doors/{id}?shortReturn=0`), parsed to JSON with FK IDs resolved to names. Diagnostic use — one SmartService session per call, do not poll.
+
+**Response (abridged):**
+```json
+{
+  "id": 280, "name": "RSU_87, SES Rear Entry/Exit", "mode": "normal",
+  "hardware":  { "ktType": "KT400", "doorLockMode": "FailsSecure" },
+  "timing":    { "unlockTimeSec": 10, "openTimeSec": 30, "extendedUnlockTimeSec": 40 },
+  "contacts":  { "doorContact": { "id": 294, "name": "...", "schedule": {} },
+                 "rexContact":  { "id": 295, "name": "...", "schedule": {} } },
+  "relays":    { "lockingDevice": { "id": 284, "name": "..." }, "accessGranted": { "id": 0 } },
+  "behaviour": { "onAccess": true, "onRex": true, "unlockOnRex": false, "rexRestartPrimary": true },
+  "alarms":    { "alarmOnDOTL": true, "alarmOnDOTLDelaySec": 15 },
+  "schedules": { "rex": {}, "unlock": {}, "doorContact": {} }
+}
+```
+
+EntraPass knows nothing about door-side hardware (operators, logic modules, push plates). Identical config on two doors does not imply identical behaviour — only compare doors known to share physical hardware.
+
+---
+
 ### POST /api/v1/doors/:id/unlock
 
 Unlock door for N seconds, then revert to previous mode.

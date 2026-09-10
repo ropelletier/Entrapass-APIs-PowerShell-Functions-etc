@@ -41,3 +41,6 @@ logs/
 
 # Sync script saved defaults
 .sync-config.json
+
+# ADS table backups (binary, large, restore-only)
+backups/

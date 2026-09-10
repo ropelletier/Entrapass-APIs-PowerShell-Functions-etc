@@ -21,7 +21,8 @@ Client (School Tech Ops)
 |------|--------|-----------|
 | [users.md](users.md) | Cardholders | GET/POST/PUT users, cards-per-user, events-per-user |
 | [cards.md](cards.md) | Card Numbers | GET/POST/PUT/DELETE card assignments, slot management |
-| [doors.md](doors.md) | Door Control | GET doors, POST unlock/lock/normal with auto-revert |
+| [doors.md](doors.md) | Door Control | GET doors, GET door config, POST unlock/lock/normal with auto-revert |
+| [sync.md](sync.md) | Change Feed | GET sync/cursor, GET sync/changes — TransactionTag delta for external caches |
 | [events.md](events.md) | Access Events | GET events by date/user/door, recent events window |
 | [access-levels.md](access-levels.md) | Access Levels | GET/PUT per-cardholder access level, door exceptions, CRUD levels |
 | [lookup.md](lookup.md) | Reference Data | GET/POST/PUT access levels, card types |
